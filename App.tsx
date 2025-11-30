@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Play, Pause, RotateCcw, MousePointer2, Circle, Square, Triangle, Camera, Download, Link, Eclipse, MoveRight, Upload, Zap, Activity, BarChart2, TrendingUp, Navigation, ArrowRight, Gauge, Layers } from 'lucide-react';
+import { Play, Pause, RotateCcw, MousePointer2, Circle, Square, Triangle, Camera, Download, Link, Eclipse, MoveRight, Upload, Zap, Activity, BarChart2, TrendingUp, Navigation, ArrowRight, Gauge, Layers, Plus, Minus, Scan } from 'lucide-react';
 import SimulationCanvas, { CanvasRef } from './components/SimulationCanvas';
 import PropertiesPanel from './components/PropertiesPanel';
 import DataCharts from './components/DataCharts';
@@ -38,6 +38,7 @@ const App: React.FC = () => {
   const [arcBuilder, setArcBuilder] = useState<ArcBuilder | null>(null);
   const [rampBuilder, setRampBuilder] = useState<RampBuilder | null>(null);
   const [constraintBuilder, setConstraintBuilder] = useState<string | null>(null); // Holds first body ID
+  const [pinnedBodyId, setPinnedBodyId] = useState<string | null>(null);
   
   const engineRef = useRef(new PhysicsEngine());
   const canvasRef = useRef<CanvasRef>(null);
@@ -87,6 +88,8 @@ const App: React.FC = () => {
 
   const handleTogglePause = () => setState(s => ({ ...s, paused: !s.paused }));
   const handleReset = () => setState({ ...INITIAL_STATE, camera: state.camera });
+  const handleResetView = () => setState(s => ({ ...s, camera: { x: window.innerWidth / 2, y: window.innerHeight / 2, zoom: 1 } }));
+  
   const handleSelectBody = (id: string | null) => {
       // Logic to toggle trajectory if tool is active
       if (dragMode === 'tool_traj' && id) {
@@ -115,6 +118,21 @@ const App: React.FC = () => {
               ...s,
               camera: { x: newCamX, y: newCamY, zoom: newZoom }
           };
+      });
+  };
+
+  const setZoom = (z: number) => {
+      setState(s => {
+          const newZoom = Math.max(0.1, Math.min(5, z));
+          const cx = window.innerWidth / 2;
+          const cy = window.innerHeight / 2;
+          // Zoom towards center of screen approximately
+          const worldCx = (cx - s.camera.x) / s.camera.zoom;
+          const worldCy = (cy - s.camera.y) / s.camera.zoom;
+          const newCamX = cx - worldCx * newZoom;
+          const newCamY = cy - worldCy * newZoom;
+          
+          return { ...s, camera: { ...s.camera, x: newCamX, y: newCamY, zoom: newZoom } };
       });
   };
 
@@ -172,7 +190,8 @@ const App: React.FC = () => {
                 width: length,
                 height: 5, // Thinner ramp
                 color: rampBuilder.isConveyor ? '#8b5cf6' : '#94a3b8', 
-                selected: true, showTrajectory: false, trail: []
+                selected: true, showTrajectory: false, trail: [],
+                showCharge: true
             };
             
             if (rampBuilder.isConveyor) {
@@ -193,9 +212,29 @@ const App: React.FC = () => {
             setArcBuilder({ phase: 1, center: pos, radius: 0, startAngle: 0 });
         } else if (arcBuilder.phase === 1) {
             const r = Vec2.dist(arcBuilder.center, pos);
-            setArcBuilder({ ...arcBuilder, phase: 2, radius: r });
+            const startAngle = Math.atan2(pos.y - arcBuilder.center.y, pos.x - arcBuilder.center.x);
+            setArcBuilder({ ...arcBuilder, phase: 2, radius: r, startAngle: startAngle });
         } else if (arcBuilder.phase === 2) {
             const angle = Math.atan2(pos.y - arcBuilder.center.y, pos.x - arcBuilder.center.x);
+            
+            // Check if user clicked back near the start point (Full Circle)
+            // Use distance of mouse to start point
+            const startPoint = {
+                x: arcBuilder.center.x + arcBuilder.radius * Math.cos(arcBuilder.startAngle),
+                y: arcBuilder.center.y + arcBuilder.radius * Math.sin(arcBuilder.startAngle)
+            };
+            const distToStart = Vec2.dist(pos, startPoint);
+            
+            let finalEndAngle = angle;
+            if (distToStart < 20) {
+                // If close to start, make it a full loop
+                finalEndAngle = arcBuilder.startAngle + 2 * Math.PI;
+            } else {
+                // Normalize for standard arc drawing direction if needed, but simplistic is fine
+                // Ensure end > start for simplicity in rendering if we want counter-clockwise
+                if (finalEndAngle < arcBuilder.startAngle) finalEndAngle += 2*Math.PI;
+            }
+
             const newBody: PhysicsBody = {
                 id: `arc_${Date.now()}`,
                 type: BodyType.ARC,
@@ -204,9 +243,10 @@ const App: React.FC = () => {
                 mass: 0, inverseMass: 0, restitution: 1.0, friction: 0.5, charge: 0,
                 angle: 0, angularVelocity: 0, momentInertia: 0, inverseInertia: 0,
                 radius: arcBuilder.radius,
-                arcStartAngle: 0,
-                arcEndAngle: angle < 0 ? angle + 2*Math.PI : angle, // Normalize 0-2PI
-                color: '#e2e8f0', selected: true, showTrajectory: false, trail: []
+                arcStartAngle: arcBuilder.startAngle,
+                arcEndAngle: finalEndAngle,
+                color: '#e2e8f0', selected: true, showTrajectory: false, trail: [],
+                showCharge: true
             };
             
             setState(s => ({ ...s, bodies: [...s.bodies, newBody], selectedBodyId: newBody.id }));
@@ -274,7 +314,7 @@ const App: React.FC = () => {
         angle: 0, angularVelocity: 0, momentInertia: 50, inverseInertia: 0.02,
         color: '#ec4899',
         selected: true, showTrajectory: false, trail: [],
-        showVelocity: false, showAcceleration: false, showForce: false, showCharge: false
+        showVelocity: false, showAcceleration: false, showForce: false, showCharge: true
     };
 
     if (dragMode === 'add_box') {
@@ -315,8 +355,9 @@ const App: React.FC = () => {
         ...s,
         bodies: s.bodies.filter(b => b.id !== id),
         constraints: s.constraints.filter(c => c.bodyAId !== id && c.bodyBId !== id),
-        selectedBodyId: null
+        selectedBodyId: s.selectedBodyId === id ? null : s.selectedBodyId
     }));
+    if (pinnedBodyId === id) setPinnedBodyId(null);
   };
 
   const handleSaveScene = () => {
@@ -363,6 +404,10 @@ const App: React.FC = () => {
   };
 
   const setClear = () => { setDragMode('select'); setArcBuilder(null); setRampBuilder(null); setConstraintBuilder(null); };
+
+  const handleTogglePin = (id: string | null) => {
+      setPinnedBodyId(id);
+  };
 
   return (
     <div className="flex h-screen w-screen bg-slate-950 overflow-hidden font-sans text-slate-200">
@@ -436,8 +481,39 @@ const App: React.FC = () => {
                 <button 
                     onClick={handleReset}
                     className="flex items-center space-x-2 px-3 py-1.5 rounded-md hover:bg-slate-800 text-slate-400 hover:text-white transition text-sm"
+                    title="重置场景"
                 >
                     <RotateCcw size={16} />
+                </button>
+            </div>
+
+            {/* View Controls (Zoom/Reset) */}
+             <div className="flex items-center space-x-2 bg-slate-800/30 px-2 py-1 rounded border border-slate-800">
+                <button 
+                    onClick={() => setZoom(state.camera.zoom - 0.2)}
+                    className="p-1 hover:bg-slate-700 rounded text-slate-400 hover:text-white"
+                >
+                    <Minus size={14} />
+                </button>
+                <input 
+                    type="range" min="0.1" max="3" step="0.1"
+                    value={state.camera.zoom}
+                    onChange={(e) => setZoom(parseFloat(e.target.value))}
+                    className="w-24 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer"
+                />
+                <button 
+                    onClick={() => setZoom(state.camera.zoom + 0.2)}
+                    className="p-1 hover:bg-slate-700 rounded text-slate-400 hover:text-white"
+                >
+                    <Plus size={14} />
+                </button>
+                <div className="w-px h-4 bg-slate-700 mx-1"></div>
+                <button 
+                    onClick={handleResetView}
+                    className="p-1 hover:bg-slate-700 rounded text-slate-400 hover:text-white"
+                    title="重置视图"
+                >
+                    <Scan size={14} />
                 </button>
             </div>
 
@@ -496,6 +572,21 @@ const App: React.FC = () => {
                 constraintBuilder={constraintBuilder}
              />
              
+             {/* Pinned Chart Overlay */}
+             {pinnedBodyId && (
+                 <div className="absolute top-4 right-4 w-96 bg-slate-900/90 border border-slate-700 rounded-xl shadow-2xl backdrop-blur-sm z-20 overflow-hidden flex flex-col p-3 ring-1 ring-slate-700">
+                    <div className="flex justify-between items-center mb-2">
+                        <span className="text-xs font-bold text-slate-300 uppercase tracking-wider">固定视图 (Pinned)</span>
+                    </div>
+                    <DataCharts 
+                        selectedBodyId={pinnedBodyId} 
+                        state={state} 
+                        isPinned={true}
+                        onTogglePin={handleTogglePin}
+                    />
+                 </div>
+             )}
+
              {/* HUD Messages */}
              <div className="absolute top-4 left-4 pointer-events-none flex flex-col items-start space-y-2">
                  {dragMode === 'tool_traj' && <div className="hud-badge bg-blue-600">点击物体切换轨迹显示</div>}
@@ -523,8 +614,13 @@ const App: React.FC = () => {
                 onDelete={handleDeleteBody}
             />
         </div>
-        <div className="h-80 border-t border-slate-800 bg-slate-900 p-4">
-            <DataCharts selectedBodyId={state.selectedBodyId} state={state} />
+        <div className="border-t border-slate-800 bg-slate-900 p-4 shrink-0">
+            <DataCharts 
+                selectedBodyId={state.selectedBodyId} 
+                state={state} 
+                isPinned={false}
+                onTogglePin={handleTogglePin}
+            />
         </div>
       </div>
     </div>

@@ -3,10 +3,13 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as d3 from 'd3';
 import { PhysicsBody, SimulationState, ChartType } from '../types';
 import { Vec2 } from '../services/vectorMath';
+import { Pin, PinOff, Maximize2, Minimize2 } from 'lucide-react';
 
 interface Props {
   selectedBodyId: string | null;
   state: SimulationState;
+  isPinned?: boolean;
+  onTogglePin?: (id: string | null) => void;
 }
 
 const HISTORY_LENGTH = 500;
@@ -23,13 +26,12 @@ interface DataPoint {
     a: number;
     ke: number;
 }
-const dataHistory: DataPoint[] = [];
 
 type AxisVariable = 't' | 'x' | 'y' | 'vx' | 'vy' | 'v' | 'ax' | 'ay' | 'a' | 'ke';
 type AxisModifier = 'none' | 'sq' | 'abs' | 'sqrt';
 
 const VarSelect = ({ val, onChange }: {val: string, onChange: (v: any) => void}) => (
-    <select value={val} onChange={(e) => onChange(e.target.value)} className="bg-slate-800 text-[10px] w-12 rounded border border-slate-700">
+    <select value={val} onChange={(e) => onChange(e.target.value)} className="bg-slate-800 text-[10px] w-12 rounded border border-slate-700 outline-none">
         <option value="t">t</option>
         <option value="x">x</option>
         <option value="y">y</option>
@@ -44,7 +46,7 @@ const VarSelect = ({ val, onChange }: {val: string, onChange: (v: any) => void})
 );
 
 const ModSelect = ({ val, onChange }: {val: string, onChange: (v: any) => void}) => (
-    <select value={val} onChange={(e) => onChange(e.target.value)} className="bg-slate-800 text-[10px] w-12 rounded border border-slate-700">
+    <select value={val} onChange={(e) => onChange(e.target.value)} className="bg-slate-800 text-[10px] w-12 rounded border border-slate-700 outline-none">
         <option value="none">-</option>
         <option value="sq">^2</option>
         <option value="sqrt">√</option>
@@ -52,14 +54,19 @@ const ModSelect = ({ val, onChange }: {val: string, onChange: (v: any) => void})
     </select>
 );
 
-const DataCharts: React.FC<Props> = ({ selectedBodyId, state }) => {
+const DataCharts: React.FC<Props> = ({ selectedBodyId, state, isPinned, onTogglePin }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const lastTimeRef = useRef(0);
   
+  // Instance specific history
+  const historyRef = useRef<DataPoint[]>([]);
+
   // Modes
   const [mode, setMode] = useState<'simple' | 'advanced'>('simple');
   const [simpleChartType, setSimpleChartType] = useState<string>('v-t');
+  const [chartHeight, setChartHeight] = useState<number>(180);
+  const [isExpanded, setIsExpanded] = useState(false);
   
   // Advanced Config
   const [xAxisVar, setXAxisVar] = useState<AxisVariable>('t');
@@ -67,9 +74,15 @@ const DataCharts: React.FC<Props> = ({ selectedBodyId, state }) => {
   const [yAxisVar, setYAxisVar] = useState<AxisVariable>('v');
   const [yAxisMod, setYAxisMod] = useState<AxisModifier>('none');
 
+  const toggleExpand = () => {
+      const newExpanded = !isExpanded;
+      setIsExpanded(newExpanded);
+      setChartHeight(newExpanded ? 300 : 180);
+  };
+
   useEffect(() => {
     if (!selectedBodyId) {
-       dataHistory.length = 0;
+       historyRef.current = [];
     }
   }, [selectedBodyId]);
 
@@ -79,12 +92,13 @@ const DataCharts: React.FC<Props> = ({ selectedBodyId, state }) => {
     const body = state.bodies.find(b => b.id === selectedBodyId);
     if (!body) return;
 
+    // Throttle updates to ~20fps for chart performance
     if (state.time - lastTimeRef.current > 0.05) {
         const v = Vec2.mag(body.velocity);
         const a = Vec2.mag(body.acceleration);
         const ke = 0.5 * body.mass * v * v;
         
-        dataHistory.push({
+        historyRef.current.push({
             t: state.time,
             x: body.position.x,
             y: -body.position.y,
@@ -96,7 +110,8 @@ const DataCharts: React.FC<Props> = ({ selectedBodyId, state }) => {
             a: a,
             ke: ke
         });
-        if (dataHistory.length > HISTORY_LENGTH) dataHistory.shift();
+        
+        if (historyRef.current.length > HISTORY_LENGTH) historyRef.current.shift();
         
         lastTimeRef.current = state.time;
         drawChart();
@@ -106,7 +121,14 @@ const DataCharts: React.FC<Props> = ({ selectedBodyId, state }) => {
   // Re-draw on config change
   useEffect(() => {
       drawChart();
-  }, [mode, simpleChartType, xAxisVar, xAxisMod, yAxisVar, yAxisMod]);
+  }, [mode, simpleChartType, xAxisVar, xAxisMod, yAxisVar, yAxisMod, chartHeight]);
+
+  // Redraw when container resizes (e.g. expansion)
+  useEffect(() => {
+      const handleResize = () => drawChart();
+      window.addEventListener('resize', handleResize);
+      return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   const getValue = (pt: DataPoint, v: AxisVariable, mod: AxisModifier): number => {
       let val = pt[v];
@@ -117,10 +139,10 @@ const DataCharts: React.FC<Props> = ({ selectedBodyId, state }) => {
   };
 
   const drawChart = () => {
-    if (!containerRef.current || !svgRef.current || dataHistory.length < 2) return;
+    if (!containerRef.current || !svgRef.current || historyRef.current.length < 2) return;
 
     const width = containerRef.current.clientWidth;
-    const height = 180;
+    const height = chartHeight;
     const margin = { top: 10, right: 10, bottom: 20, left: 40 };
 
     const svg = d3.select(svgRef.current);
@@ -154,8 +176,8 @@ const DataCharts: React.FC<Props> = ({ selectedBodyId, state }) => {
         labelY = formatLabel(yAxisVar, yAxisMod);
     }
 
-    const xExtent = d3.extent(dataHistory, getX) as [number, number];
-    const yExtent = d3.extent(dataHistory, getY) as [number, number];
+    const xExtent = d3.extent(historyRef.current, getX) as [number, number];
+    const yExtent = d3.extent(historyRef.current, getY) as [number, number];
     
     // Safety check for NaNs or Infinity
     if (isNaN(xExtent[0]) || isNaN(yExtent[0])) return;
@@ -195,7 +217,7 @@ const DataCharts: React.FC<Props> = ({ selectedBodyId, state }) => {
 
     // Path
     svg.append("path")
-      .datum(dataHistory)
+      .datum(historyRef.current)
       .attr("fill", "none")
       .attr("stroke", "#3b82f6")
       .attr("stroke-width", 2)
@@ -229,33 +251,57 @@ const DataCharts: React.FC<Props> = ({ selectedBodyId, state }) => {
   return (
     <div ref={containerRef} className="w-full h-full flex flex-col">
       <div className="flex justify-between items-center mb-2">
-          <div className="flex space-x-2 bg-slate-800 p-0.5 rounded">
-              <button 
-                onClick={() => setMode('simple')}
-                className={`text-[10px] px-2 py-0.5 rounded ${mode === 'simple' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}
-              >
-                  简单
-              </button>
-              <button 
-                onClick={() => setMode('advanced')}
-                className={`text-[10px] px-2 py-0.5 rounded ${mode === 'advanced' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}
-              >
-                  高级
-              </button>
+          {/* Left Controls */}
+          <div className="flex space-x-2">
+            <div className="flex bg-slate-800 p-0.5 rounded">
+                <button 
+                    onClick={() => setMode('simple')}
+                    className={`text-[10px] px-2 py-0.5 rounded ${mode === 'simple' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}
+                >
+                    简单
+                </button>
+                <button 
+                    onClick={() => setMode('advanced')}
+                    className={`text-[10px] px-2 py-0.5 rounded ${mode === 'advanced' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}
+                >
+                    高级
+                </button>
+            </div>
           </div>
 
-          {mode === 'simple' && (
-              <select 
-                value={simpleChartType} 
-                onChange={(e) => setSimpleChartType(e.target.value)}
-                className="bg-slate-800 text-xs text-white border border-slate-600 rounded px-1 py-0.5 outline-none"
+          {/* Right Controls */}
+          <div className="flex items-center space-x-1">
+             {mode === 'simple' && (
+                  <select 
+                    value={simpleChartType} 
+                    onChange={(e) => setSimpleChartType(e.target.value)}
+                    className="bg-slate-800 text-xs text-white border border-slate-600 rounded px-1 py-0.5 outline-none max-w-[90px]"
+                  >
+                      <option value="v-t">v-t (速度)</option>
+                      <option value="a-t">a-t (加速度)</option>
+                      <option value="x-y">y-x (轨迹)</option>
+                      <option value="ke-t">Ek-t (动能)</option>
+                  </select>
+              )}
+              
+              <button 
+                  onClick={toggleExpand}
+                  className="p-1 text-slate-400 hover:text-white transition"
+                  title={isExpanded ? "还原 (Restore)" : "放大 (Enlarge)"}
               >
-                  <option value="v-t">v-t (速度)</option>
-                  <option value="a-t">a-t (加速度)</option>
-                  <option value="x-y">y-x (轨迹)</option>
-                  <option value="ke-t">Ek-t (动能)</option>
-              </select>
-          )}
+                  {isExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+              </button>
+
+              {onTogglePin && (
+                  <button 
+                      onClick={() => onTogglePin(isPinned ? null : selectedBodyId)}
+                      className={`p-1 transition ${isPinned ? 'text-blue-400' : 'text-slate-400 hover:text-white'}`}
+                      title={isPinned ? "取消固定 (Unpin)" : "固定到画布 (Pin)"}
+                  >
+                      {isPinned ? <PinOff size={14} /> : <Pin size={14} />}
+                  </button>
+              )}
+          </div>
       </div>
 
       {mode === 'advanced' && (
@@ -277,7 +323,12 @@ const DataCharts: React.FC<Props> = ({ selectedBodyId, state }) => {
           </div>
       )}
 
-      <svg ref={svgRef} width="100%" height="180" className="bg-slate-900/50 rounded border border-slate-700 flex-1"></svg>
+      <svg 
+        ref={svgRef} 
+        width="100%" 
+        height={chartHeight} 
+        className="bg-slate-900/50 rounded border border-slate-700 flex-shrink-0 transition-all duration-300"
+      ></svg>
     </div>
   );
 };

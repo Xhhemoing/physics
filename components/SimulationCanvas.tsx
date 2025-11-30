@@ -52,10 +52,20 @@ const SimulationCanvas = forwardRef<CanvasRef, Props>(({ state, onSelectBody, on
 
   const snapToGrid = (v: Vector2): Vector2 => {
       const GRID = 20;
-      return {
-          x: Math.round(v.x / GRID) * GRID,
-          y: Math.round(v.y / GRID) * GRID
-      };
+      const SNAP_THRESHOLD = 8; // Weak snap: only snap if within 8px
+      
+      const snappedX = Math.round(v.x / GRID) * GRID;
+      const snappedY = Math.round(v.y / GRID) * GRID;
+      
+      const res = { x: v.x, y: v.y };
+
+      if (Math.abs(v.x - snappedX) < SNAP_THRESHOLD) {
+          res.x = snappedX;
+      }
+      if (Math.abs(v.y - snappedY) < SNAP_THRESHOLD) {
+          res.y = snappedY;
+      }
+      return res;
   };
 
   // Rendering Loop
