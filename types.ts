@@ -134,6 +134,7 @@ export interface SimulationState {
   gravity: Vector2;
   selectedBodyId: string | null;
   selectedFieldId: string | null;
+  selectedConstraintId: string | null;
   camera: {
     x: number;
     y: number;

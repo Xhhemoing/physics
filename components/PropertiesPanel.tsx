@@ -1,18 +1,79 @@
 
 import React from 'react';
-import { PhysicsBody, BodyType, PhysicsField, FieldType, Vector2, FieldShape } from '../types';
+import { PhysicsBody, BodyType, PhysicsField, FieldType, Vector2, FieldShape, Constraint, ConstraintType } from '../types';
 
 interface Props {
   body: PhysicsBody | null;
   field: PhysicsField | null;
+  constraint: Constraint | null;
   onUpdateBody: (id: string, updates: Partial<PhysicsBody>) => void;
   onUpdateField: (id: string, updates: Partial<PhysicsField>) => void;
+  onUpdateConstraint: (id: string, updates: Partial<Constraint>) => void;
   onDeleteBody: (id: string) => void;
   onDeleteField: (id: string) => void;
+  onDeleteConstraint: (id: string) => void;
 }
 
-const PropertiesPanel: React.FC<Props> = ({ body, field, onUpdateBody, onUpdateField, onDeleteBody, onDeleteField }) => {
+const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBody, onUpdateField, onUpdateConstraint, onDeleteBody, onDeleteField, onDeleteConstraint }) => {
   
+  if (constraint) {
+      return (
+          <div className="p-4 space-y-5">
+              <div className="flex justify-between items-center border-b border-slate-700 pb-3">
+                <div>
+                    <span className="text-xs text-slate-500 uppercase tracking-wider block">当前选择 (Constraint)</span>
+                    <div className="flex items-center gap-2">
+                        <h2 className="font-bold text-lg text-amber-500">{constraint.type === ConstraintType.SPRING ? "弹簧 (Spring)" : constraint.type === ConstraintType.ROD ? "杆 (Rod)" : "铰链 (Pin)"}</h2>
+                    </div>
+                </div>
+                <button 
+                    onClick={() => onDeleteConstraint(constraint.id)}
+                    className="text-red-400 hover:text-red-300 text-xs px-3 py-1.5 rounded bg-red-900/20 hover:bg-red-900/40 transition"
+                >
+                    删除
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                  {(constraint.type === ConstraintType.SPRING || constraint.type === ConstraintType.ROD) && (
+                      <div>
+                          <label className="block text-[10px] text-slate-400 mb-1 uppercase">自然长度 Length (m)</label>
+                          <input 
+                              type="number" min="0" step="1"
+                              value={constraint.length} 
+                              onChange={(e) => onUpdateConstraint(constraint.id, { length: Math.max(0, parseFloat(e.target.value)) })}
+                              className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
+                          />
+                      </div>
+                  )}
+
+                  {constraint.type === ConstraintType.SPRING && (
+                      <>
+                          <div>
+                              <label className="block text-[10px] text-slate-400 mb-1 uppercase">劲度系数 Stiffness (k)</label>
+                              <input 
+                                  type="number" min="0" step="0.1"
+                                  value={constraint.stiffness} 
+                                  onChange={(e) => onUpdateConstraint(constraint.id, { stiffness: Math.max(0, parseFloat(e.target.value)) })}
+                                  className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
+                              />
+                          </div>
+                          <div>
+                              <label className="block text-[10px] text-slate-400 mb-1 uppercase">阻尼 Damping</label>
+                              <input 
+                                  type="number" min="0" step="0.01"
+                                  value={constraint.damping} 
+                                  onChange={(e) => onUpdateConstraint(constraint.id, { damping: Math.max(0, parseFloat(e.target.value)) })}
+                                  className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
+                              />
+                          </div>
+                      </>
+                  )}
+              </div>
+          </div>
+      );
+  }
+
   if (field) {
       return (
           <div className="p-4 space-y-5">
@@ -42,15 +103,15 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, onUpdateBody, onUpdateF
                           <option value={FieldType.UNIFORM_ELECTRIC}>电场 (Uniform Electric)</option>
                           <option value={FieldType.UNIFORM_MAGNETIC}>磁场 (Uniform Magnetic)</option>
                           <option value={FieldType.AREA_GRAVITY}>重力场 (Gravity Zone)</option>
-                          <option value={FieldType.CUSTOM}>自定义方程 (Custom Function)</option>
+                          <option value={FieldType.CUSTOM}>自定义方程 (Function)</option>
                       </select>
                   </div>
 
                   {field.type === FieldType.CUSTOM ? (
                       <div className="space-y-3 p-2 bg-slate-800/50 rounded border border-slate-700">
-                          <p className="text-[10px] text-slate-400">输入 JavaScript 表达式，可用变量: x, y, t, Math.*</p>
+                          <p className="text-[10px] text-slate-400">输入电场强度(E)关于 x, y, t 的方程。支持 Math 库 (sin, cos 等)。</p>
                           <div>
-                              <label className="block text-[10px] text-pink-400 mb-1 font-mono">Ex(x,y) =</label>
+                              <label className="block text-[10px] text-pink-400 mb-1 font-mono">Ex(x,y,t) =</label>
                               <textarea
                                   value={field.equations?.ex || "0"}
                                   onChange={(e) => onUpdateField(field.id, { equations: { ex: e.target.value, ey: field.equations?.ey || "0" } })}
@@ -58,7 +119,7 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, onUpdateBody, onUpdateF
                               />
                           </div>
                           <div>
-                              <label className="block text-[10px] text-pink-400 mb-1 font-mono">Ey(x,y) =</label>
+                              <label className="block text-[10px] text-pink-400 mb-1 font-mono">Ey(x,y,t) =</label>
                               <textarea
                                   value={field.equations?.ey || "0"}
                                   onChange={(e) => onUpdateField(field.id, { equations: { ey: e.target.value, ex: field.equations?.ex || "0" } })}

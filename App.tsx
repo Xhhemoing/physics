@@ -18,6 +18,7 @@ const INITIAL_STATE: SimulationState = {
   gravity: { x: 0, y: 10 },
   selectedBodyId: null,
   selectedFieldId: null,
+  selectedConstraintId: null,
   camera: { x: 0, y: 0, zoom: 1 } // Origin at top-left
 };
 
@@ -98,12 +99,16 @@ const App: React.FC = () => {
               bodies: s.bodies.map(b => b.id === id ? { ...b, showTrajectory: !b.showTrajectory } : b)
           }));
       } else {
-          setState(s => ({ ...s, selectedBodyId: id, selectedFieldId: null }));
+          setState(s => ({ ...s, selectedBodyId: id, selectedFieldId: null, selectedConstraintId: null }));
       }
   };
 
   const handleSelectField = (id: string | null) => {
-      setState(s => ({ ...s, selectedFieldId: id, selectedBodyId: null }));
+      setState(s => ({ ...s, selectedFieldId: id, selectedBodyId: null, selectedConstraintId: null }));
+  };
+
+  const handleSelectConstraint = (id: string | null) => {
+      setState(s => ({ ...s, selectedConstraintId: id, selectedBodyId: null, selectedFieldId: null }));
   };
 
   const handleZoom = (deltaY: number, mouseX: number, mouseY: number) => {
@@ -187,7 +192,8 @@ const App: React.FC = () => {
           ...s,
           fields: [newField, ...s.fields], // Add to front (bottom layer conceptually, though render order handles it)
           selectedFieldId: newField.id,
-          selectedBodyId: null
+          selectedBodyId: null,
+          selectedConstraintId: null
       }));
       setDragMode('select');
   };
@@ -199,32 +205,34 @@ const App: React.FC = () => {
             setRampBuilder({ start: pos, isConveyor: dragMode === 'add_conveyor' });
         } else {
             const start = rampBuilder.start;
-            const end = pos;
+            const end = pos; // Use snapped pos directly
             const center = Vec2.mul(Vec2.add(start, end), 0.5);
             const delta = Vec2.sub(end, start);
             const length = Vec2.mag(delta);
             const angle = Math.atan2(delta.y, delta.x);
 
-            const newBody: PhysicsBody = {
-                id: `ramp_${Date.now()}`,
-                type: BodyType.BOX,
-                position: center,
-                velocity: {x:0, y:0}, acceleration: {x:0, y:0}, force: {x:0, y:0}, constantForce: {x:0, y:0},
-                mass: 0, inverseMass: 0, restitution: 1.0, friction: 0.5, charge: 0,
-                angle: angle, angularVelocity: 0, momentInertia: 0, inverseInertia: 0,
-                width: length,
-                height: 5, 
-                color: rampBuilder.isConveyor ? '#8b5cf6' : '#94a3b8', 
-                selected: true, showTrajectory: false, trail: [],
-                showCharge: true
-            };
-            
-            if (rampBuilder.isConveyor) {
-                newBody.surfaceSpeed = 50; 
-                newBody.height = 10; 
-            }
+            if (length > 1) { // Avoid zero length
+                const newBody: PhysicsBody = {
+                    id: `ramp_${Date.now()}`,
+                    type: BodyType.BOX,
+                    position: center,
+                    velocity: {x:0, y:0}, acceleration: {x:0, y:0}, force: {x:0, y:0}, constantForce: {x:0, y:0},
+                    mass: 0, inverseMass: 0, restitution: 1.0, friction: 0.5, charge: 0,
+                    angle: angle, angularVelocity: 0, momentInertia: 0, inverseInertia: 0,
+                    width: length,
+                    height: 5, 
+                    color: rampBuilder.isConveyor ? '#8b5cf6' : '#94a3b8', 
+                    selected: true, showTrajectory: false, trail: [],
+                    showCharge: true, showVelocity: false, showForce: false
+                };
+                
+                if (rampBuilder.isConveyor) {
+                    newBody.surfaceSpeed = 50; 
+                    newBody.height = 10; 
+                }
 
-            setState(s => ({ ...s, bodies: [...s.bodies, newBody], selectedBodyId: newBody.id }));
+                setState(s => ({ ...s, bodies: [...s.bodies, newBody], selectedBodyId: newBody.id }));
+            }
             setRampBuilder(null);
             setDragMode('select');
         }
@@ -242,17 +250,14 @@ const App: React.FC = () => {
         } else if (arcBuilder.phase === 2) {
             const angle = Math.atan2(pos.y - arcBuilder.center.y, pos.x - arcBuilder.center.x);
             
-            const startPoint = {
-                x: arcBuilder.center.x + arcBuilder.radius * Math.cos(arcBuilder.startAngle),
-                y: arcBuilder.center.y + arcBuilder.radius * Math.sin(arcBuilder.startAngle)
-            };
-            const distToStart = Vec2.dist(pos, startPoint);
+            // Logic to determine end angle relative to start angle
+            // Normalize angles 0 to 2PI
+            const norm = (a: number) => (a % (2*Math.PI) + 2*Math.PI) % (2*Math.PI);
             
+            // If dragging very close to start, make full circle
             let finalEndAngle = angle;
-            if (distToStart < 20) {
-                finalEndAngle = arcBuilder.startAngle + 2 * Math.PI;
-            } else {
-                if (finalEndAngle < arcBuilder.startAngle) finalEndAngle += 2*Math.PI;
+            if (Math.abs(norm(angle) - norm(arcBuilder.startAngle)) < 0.1) {
+                finalEndAngle = arcBuilder.startAngle + 2 * Math.PI - 0.01;
             }
 
             const newBody: PhysicsBody = {
@@ -266,7 +271,7 @@ const App: React.FC = () => {
                 arcStartAngle: arcBuilder.startAngle,
                 arcEndAngle: finalEndAngle,
                 color: '#e2e8f0', selected: true, showTrajectory: false, trail: [],
-                showCharge: true
+                showCharge: true, showVelocity: false, showForce: false
             };
             
             setState(s => ({ ...s, bodies: [...s.bodies, newBody], selectedBodyId: newBody.id }));
@@ -278,13 +283,15 @@ const App: React.FC = () => {
 
     if (dragMode === 'add_spring' || dragMode === 'add_rod' || dragMode === 'add_pin') {
         const clickedBody = state.bodies.slice().reverse().find(b => {
+             // Basic hit test to find body under cursor for constraint
              if (b.type === BodyType.CIRCLE) {
                  const hitR = b.isParticle ? 10 : (b.radius || 20);
                  return Vec2.dist(pos, b.position) < hitR;
              }
              if (b.type === BodyType.BOX) {
+                 const localPos = Vec2.rotate(Vec2.sub(pos, b.position), -b.angle);
                  const w = b.width || 40; const h = b.height || 40;
-                 return pos.x > b.position.x - w/2 && pos.x < b.position.x + w/2 && pos.y > b.position.y - h/2 && pos.y < b.position.y + h/2;
+                 return Math.abs(localPos.x) < w/2 && Math.abs(localPos.y) < h/2;
              }
              return false;
         });
@@ -300,6 +307,9 @@ const App: React.FC = () => {
                      const bodyA = state.bodies.find(b => b.id === constraintBuilder)!;
                      const bodyB = clickedBody;
                      
+                     // Calculate local anchors based on world click positions? 
+                     // For simplicity, snapping to center is default, but for Box/Rod often surface is better.
+                     // Current impl snaps to center for stability.
                      const dist = Vec2.dist(bodyA.position, bodyB.position);
 
                      const newConstraint = {
@@ -322,7 +332,7 @@ const App: React.FC = () => {
         return;
     }
 
-    if (dragMode.startsWith('tool_') || dragMode.startsWith('add_field_')) return;
+    if (dragMode.startsWith('tool_') || dragMode.startsWith('add_field_') || dragMode === 'select_nodrag') return;
 
     const newId = `body_${Date.now()}`;
     let newBody: PhysicsBody = {
@@ -365,7 +375,9 @@ const App: React.FC = () => {
     setState(s => ({
         ...s,
         bodies: [...s.bodies, newBody],
-        selectedBodyId: newId
+        selectedBodyId: newId,
+        selectedFieldId: null,
+        selectedConstraintId: null
     }));
     setDragMode('select'); 
   };
@@ -381,6 +393,13 @@ const App: React.FC = () => {
       setState(s => ({
           ...s,
           fields: s.fields.map(f => f.id === id ? { ...f, ...updates } : f)
+      }));
+  };
+  
+  const handleUpdateConstraint = (id: string, updates: Partial<any>) => {
+      setState(s => ({
+          ...s,
+          constraints: s.constraints.map(c => c.id === id ? { ...c, ...updates } : c)
       }));
   };
 
@@ -399,6 +418,14 @@ const App: React.FC = () => {
           ...s,
           fields: s.fields.filter(f => f.id !== id),
           selectedFieldId: s.selectedFieldId === id ? null : s.selectedFieldId
+      }));
+  };
+
+  const handleDeleteConstraint = (id: string) => {
+      setState(s => ({
+          ...s,
+          constraints: s.constraints.filter(c => c.id !== id),
+          selectedConstraintId: null
       }));
   };
 
@@ -468,7 +495,8 @@ const App: React.FC = () => {
         </div>
 
         <div className="w-full flex flex-col items-center gap-1">
-             <ToolBtn icon={<MousePointer2 size={18} />} active={dragMode === 'select'} onClick={setClear} tooltip="选择 (Select)" />
+             <ToolBtn icon={<MousePointer2 size={18} />} active={dragMode === 'select'} onClick={setClear} tooltip="选择/移动 (Select/Move)" />
+             <ToolBtn icon={<Crosshair size={18} />} active={dragMode === 'select_nodrag'} onClick={() => setDragMode('select_nodrag')} tooltip="仅选择 (Select Only)" />
         </div>
         
         <div className="w-8 h-px bg-slate-800 my-1 shrink-0"></div>
@@ -476,7 +504,7 @@ const App: React.FC = () => {
         {/* Collapsible Groups */}
         <ToolGroup title="物体" defaultExpanded={false}>
              <ToolBtn icon={<Circle size={18} />} active={dragMode === 'add_ball'} onClick={() => setDragMode('add_ball')} tooltip="小球 (Ball)" />
-             <ToolBtn icon={<Crosshair size={18} />} active={dragMode === 'add_particle'} onClick={() => setDragMode('add_particle')} tooltip="质点 (Particle)" />
+             <ToolBtn icon={<Disc size={18} />} active={dragMode === 'add_particle'} onClick={() => setDragMode('add_particle')} tooltip="质点 (Particle)" />
              <ToolBtn icon={<Square size={18} />} active={dragMode === 'add_box'} onClick={() => setDragMode('add_box')} tooltip="方块 (Block)" />
              <ToolBtn icon={<Triangle size={18} />} active={dragMode === 'add_triangle'} onClick={() => setDragMode('add_triangle')} tooltip="多边形 (Poly)" />
              <ToolBtn icon={<Layers size={18} />} active={dragMode === 'add_ramp'} onClick={() => setDragMode('add_ramp')} tooltip="斜面/地面 (Ramp/Plane)" />
@@ -497,7 +525,7 @@ const App: React.FC = () => {
         </ToolGroup>
 
         <ToolGroup title="工具" defaultExpanded={false}>
-             <ToolBtn icon={<Disc size={18} />} active={dragMode === 'tool_traj'} onClick={() => setDragMode('tool_traj')} tooltip="轨迹开关 (Trail Toggle)" />
+             <ToolBtn icon={<Globe size={18} />} active={dragMode === 'tool_traj'} onClick={() => setDragMode('tool_traj')} tooltip="轨迹开关 (Trail Toggle)" />
              <ToolBtn icon={<Scan size={18} />} active={dragMode === 'tool_velocity'} onClick={() => setDragMode('tool_velocity')} tooltip="设置初速度 (Velocity)" />
              <ToolBtn icon={<Magnet size={18} />} active={dragMode === 'tool_force'} onClick={() => setDragMode('tool_force')} tooltip="设置恒力 (Force)" />
         </ToolGroup>
@@ -596,6 +624,7 @@ const App: React.FC = () => {
                 state={state} 
                 onSelectBody={handleSelectBody}
                 onSelectField={handleSelectField}
+                onSelectConstraint={handleSelectConstraint}
                 onAddBody={handleAddBody}
                 onAddField={handleAddField}
                 onMoveBody={handleBodyMove}
@@ -628,6 +657,7 @@ const App: React.FC = () => {
              )}
 
              <div className="absolute top-4 left-4 pointer-events-none flex flex-col items-start space-y-2">
+                 {dragMode === 'select_nodrag' && <div className="hud-badge bg-slate-600">选择模式 (不移动)</div>}
                  {dragMode === 'tool_traj' && <div className="hud-badge bg-blue-600">点击物体切换轨迹显示</div>}
                  {dragMode === 'tool_velocity' && <div className="hud-badge bg-blue-600">点击物体 -> 拖拽设置初速度</div>}
                  {dragMode === 'tool_force' && <div className="hud-badge bg-red-600">点击物体 -> 拖拽设置恒力</div>}
@@ -651,10 +681,13 @@ const App: React.FC = () => {
             <PropertiesPanel 
                 body={state.bodies.find(b => b.id === state.selectedBodyId) || null} 
                 field={state.fields.find(f => f.id === state.selectedFieldId) || null}
+                constraint={state.constraints.find(c => c.id === state.selectedConstraintId) || null}
                 onUpdateBody={handleUpdateBody}
                 onUpdateField={handleUpdateField}
+                onUpdateConstraint={handleUpdateConstraint}
                 onDeleteBody={handleDeleteBody}
                 onDeleteField={handleDeleteField}
+                onDeleteConstraint={handleDeleteConstraint}
             />
         </div>
         <div className="border-t border-slate-800 bg-slate-900 p-4 shrink-0">
