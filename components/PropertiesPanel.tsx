@@ -1,14 +1,143 @@
 
 import React from 'react';
-import { PhysicsBody, BodyType } from '../types';
+import { PhysicsBody, BodyType, PhysicsField, FieldType, Vector2, FieldShape } from '../types';
 
 interface Props {
   body: PhysicsBody | null;
-  onUpdate: (id: string, updates: Partial<PhysicsBody>) => void;
-  onDelete: (id: string) => void;
+  field: PhysicsField | null;
+  onUpdateBody: (id: string, updates: Partial<PhysicsBody>) => void;
+  onUpdateField: (id: string, updates: Partial<PhysicsField>) => void;
+  onDeleteBody: (id: string) => void;
+  onDeleteField: (id: string) => void;
 }
 
-const PropertiesPanel: React.FC<Props> = ({ body, onUpdate, onDelete }) => {
+const PropertiesPanel: React.FC<Props> = ({ body, field, onUpdateBody, onUpdateField, onDeleteBody, onDeleteField }) => {
+  
+  if (field) {
+      return (
+          <div className="p-4 space-y-5">
+              <div className="flex justify-between items-center border-b border-slate-700 pb-3">
+                <div>
+                    <span className="text-xs text-slate-500 uppercase tracking-wider block">当前选择 (Field)</span>
+                    <div className="flex items-center gap-2">
+                        <h2 className="font-bold text-lg text-emerald-400">{field.shape} Field</h2>
+                    </div>
+                </div>
+                <button 
+                    onClick={() => onDeleteField(field.id)}
+                    className="text-red-400 hover:text-red-300 text-xs px-3 py-1.5 rounded bg-red-900/20 hover:bg-red-900/40 transition"
+                >
+                    删除
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                  <div>
+                      <label className="block text-[10px] text-slate-400 mb-1 uppercase">类型 Type</label>
+                      <select 
+                          value={field.type}
+                          onChange={(e) => onUpdateField(field.id, { type: e.target.value as FieldType })}
+                          className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm text-white outline-none"
+                      >
+                          <option value={FieldType.UNIFORM_ELECTRIC}>电场 (Uniform Electric)</option>
+                          <option value={FieldType.UNIFORM_MAGNETIC}>磁场 (Uniform Magnetic)</option>
+                          <option value={FieldType.AREA_GRAVITY}>重力场 (Gravity Zone)</option>
+                          <option value={FieldType.CUSTOM}>自定义方程 (Custom Function)</option>
+                      </select>
+                  </div>
+
+                  {field.type === FieldType.CUSTOM ? (
+                      <div className="space-y-3 p-2 bg-slate-800/50 rounded border border-slate-700">
+                          <p className="text-[10px] text-slate-400">输入 JavaScript 表达式，可用变量: x, y, t, Math.*</p>
+                          <div>
+                              <label className="block text-[10px] text-pink-400 mb-1 font-mono">Ex(x,y) =</label>
+                              <textarea
+                                  value={field.equations?.ex || "0"}
+                                  onChange={(e) => onUpdateField(field.id, { equations: { ex: e.target.value, ey: field.equations?.ey || "0" } })}
+                                  className="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs font-mono h-16 outline-none resize-none"
+                              />
+                          </div>
+                          <div>
+                              <label className="block text-[10px] text-pink-400 mb-1 font-mono">Ey(x,y) =</label>
+                              <textarea
+                                  value={field.equations?.ey || "0"}
+                                  onChange={(e) => onUpdateField(field.id, { equations: { ey: e.target.value, ex: field.equations?.ex || "0" } })}
+                                  className="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs font-mono h-16 outline-none resize-none"
+                              />
+                          </div>
+                      </div>
+                  ) : field.type === FieldType.UNIFORM_MAGNETIC ? (
+                      <div>
+                          <label className="block text-[10px] text-slate-400 mb-1 uppercase">强度 Strength (T)</label>
+                          <input 
+                              type="number" step="0.1"
+                              value={field.strength as number} 
+                              onChange={(e) => onUpdateField(field.id, { strength: parseFloat(e.target.value) })}
+                              className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
+                          />
+                      </div>
+                  ) : (
+                      <div className="grid grid-cols-2 gap-2">
+                           <div>
+                              <label className="block text-[10px] text-slate-400 mb-1 uppercase">X 强度</label>
+                              <input 
+                                  type="number" step="1"
+                                  value={(field.strength as Vector2).x} 
+                                  onChange={(e) => onUpdateField(field.id, { strength: { ...(field.strength as Vector2), x: parseFloat(e.target.value) } })}
+                                  className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
+                              />
+                           </div>
+                           <div>
+                              <label className="block text-[10px] text-slate-400 mb-1 uppercase">Y 强度</label>
+                              <input 
+                                  type="number" step="1"
+                                  value={(field.strength as Vector2).y} 
+                                  onChange={(e) => onUpdateField(field.id, { strength: { ...(field.strength as Vector2), y: parseFloat(e.target.value) } })}
+                                  className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
+                              />
+                           </div>
+                      </div>
+                  )}
+                  
+                  {field.shape === FieldShape.CIRCLE && (
+                      <div>
+                          <label className="block text-[10px] text-slate-400 mb-1 uppercase">半径 Radius</label>
+                          <input 
+                              type="number" 
+                              value={field.radius} 
+                              onChange={(e) => onUpdateField(field.id, { radius: parseFloat(e.target.value) })}
+                              className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
+                          />
+                      </div>
+                  )}
+
+                   {field.shape === FieldShape.BOX && (
+                      <div className="grid grid-cols-2 gap-2">
+                           <div>
+                              <label className="block text-[10px] text-slate-400 mb-1 uppercase">宽度 Width</label>
+                              <input 
+                                  type="number" 
+                                  value={field.size.x} 
+                                  onChange={(e) => onUpdateField(field.id, { size: { ...field.size, x: parseFloat(e.target.value) } })}
+                                  className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
+                              />
+                           </div>
+                           <div>
+                              <label className="block text-[10px] text-slate-400 mb-1 uppercase">高度 Height</label>
+                              <input 
+                                  type="number" 
+                                  value={field.size.y} 
+                                  onChange={(e) => onUpdateField(field.id, { size: { ...field.size, y: parseFloat(e.target.value) } })}
+                                  className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
+                              />
+                           </div>
+                      </div>
+                  )}
+              </div>
+          </div>
+      );
+  }
+
   if (!body) {
     return (
         <div className="p-4 text-slate-500 text-center text-sm flex flex-col items-center justify-center h-full opacity-50">
@@ -18,12 +147,12 @@ const PropertiesPanel: React.FC<Props> = ({ body, onUpdate, onDelete }) => {
     );
   }
 
-  const handleChange = (field: keyof PhysicsBody, value: string | number) => {
+  const handleChange = (key: keyof PhysicsBody, value: string | number) => {
     let val = Number(value);
-    if (field === 'mass') {
-        onUpdate(body.id, { mass: val, inverseMass: val === 0 ? 0 : 1/val });
+    if (key === 'mass') {
+        onUpdateBody(body.id, { mass: val, inverseMass: val === 0 ? 0 : 1/val });
     } else {
-        onUpdate(body.id, { [field]: val });
+        onUpdateBody(body.id, { [key]: val });
     }
   };
   
@@ -32,10 +161,13 @@ const PropertiesPanel: React.FC<Props> = ({ body, onUpdate, onDelete }) => {
       <div className="flex justify-between items-center border-b border-slate-700 pb-3">
         <div>
             <span className="text-xs text-slate-500 uppercase tracking-wider block">当前选择</span>
-            <h2 className="font-bold text-lg text-amber-400">{body.type}</h2>
+            <div className="flex items-center gap-2">
+                <h2 className="font-bold text-lg text-amber-400">{body.isParticle ? 'PARTICLE' : body.type}</h2>
+                {body.isParticle && <span className="text-[10px] bg-yellow-900 text-yellow-200 px-1 rounded border border-yellow-700">质点</span>}
+            </div>
         </div>
         <button 
-            onClick={() => onDelete(body.id)}
+            onClick={() => onDeleteBody(body.id)}
             className="text-red-400 hover:text-red-300 text-xs px-3 py-1.5 rounded bg-red-900/20 hover:bg-red-900/40 transition"
         >
             删除 (Delete)
@@ -53,7 +185,7 @@ const PropertiesPanel: React.FC<Props> = ({ body, onUpdate, onDelete }) => {
                         type="checkbox" 
                         id="traj"
                         checked={body.showTrajectory || false}
-                        onChange={(e) => onUpdate(body.id, { showTrajectory: e.target.checked })}
+                        onChange={(e) => onUpdateBody(body.id, { showTrajectory: e.target.checked })}
                         className="w-4 h-4 rounded border-slate-600 bg-slate-800"
                      />
                      <label htmlFor="traj" className="text-xs text-slate-400">轨迹 (Trail)</label>
@@ -64,7 +196,7 @@ const PropertiesPanel: React.FC<Props> = ({ body, onUpdate, onDelete }) => {
                         type="checkbox" 
                         id="showVel"
                         checked={body.showVelocity || false}
-                        onChange={(e) => onUpdate(body.id, { showVelocity: e.target.checked })}
+                        onChange={(e) => onUpdateBody(body.id, { showVelocity: e.target.checked })}
                         className="w-4 h-4 rounded border-slate-600 bg-slate-800"
                      />
                      <label htmlFor="showVel" className="text-xs text-slate-400">速度 (Vel)</label>
@@ -75,7 +207,7 @@ const PropertiesPanel: React.FC<Props> = ({ body, onUpdate, onDelete }) => {
                         type="checkbox" 
                         id="showAcc"
                         checked={body.showAcceleration || false}
-                        onChange={(e) => onUpdate(body.id, { showAcceleration: e.target.checked })}
+                        onChange={(e) => onUpdateBody(body.id, { showAcceleration: e.target.checked })}
                         className="w-4 h-4 rounded border-slate-600 bg-slate-800"
                      />
                      <label htmlFor="showAcc" className="text-xs text-slate-400">加速度 (Acc)</label>
@@ -86,7 +218,7 @@ const PropertiesPanel: React.FC<Props> = ({ body, onUpdate, onDelete }) => {
                         type="checkbox" 
                         id="showForce"
                         checked={body.showForce || false}
-                        onChange={(e) => onUpdate(body.id, { showForce: e.target.checked })}
+                        onChange={(e) => onUpdateBody(body.id, { showForce: e.target.checked })}
                         className="w-4 h-4 rounded border-slate-600 bg-slate-800"
                      />
                      <label htmlFor="showForce" className="text-xs text-slate-400">受力 (Force)</label>
@@ -97,7 +229,7 @@ const PropertiesPanel: React.FC<Props> = ({ body, onUpdate, onDelete }) => {
                         type="checkbox" 
                         id="showCharge"
                         checked={body.showCharge || false}
-                        onChange={(e) => onUpdate(body.id, { showCharge: e.target.checked })}
+                        onChange={(e) => onUpdateBody(body.id, { showCharge: e.target.checked })}
                         className="w-4 h-4 rounded border-slate-600 bg-slate-800"
                      />
                      <label htmlFor="showCharge" className="text-xs text-slate-400">电荷 (Charge)</label>
@@ -151,7 +283,6 @@ const PropertiesPanel: React.FC<Props> = ({ body, onUpdate, onDelete }) => {
                 </div>
             </div>
 
-             {/* Conveyor Specific */}
              {body.surfaceSpeed !== undefined && (
                 <div>
                     <label className="block text-[10px] text-slate-400 mb-1 uppercase">传送带速度 Surface Speed</label>
@@ -169,7 +300,7 @@ const PropertiesPanel: React.FC<Props> = ({ body, onUpdate, onDelete }) => {
         <div className="space-y-3">
             <h3 className="text-xs font-semibold text-slate-300 border-l-2 border-purple-500 pl-2">几何形状 (Geometry)</h3>
             
-            {(body.type === BodyType.CIRCLE || body.type === BodyType.ARC) && (
+            {!body.isParticle && (body.type === BodyType.CIRCLE || body.type === BodyType.ARC) && (
                 <div>
                     <label className="block text-[10px] text-slate-400 mb-1 uppercase">半径 Radius (m)</label>
                     <input 

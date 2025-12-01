@@ -21,8 +21,11 @@ export interface PhysicsBody {
   position: Vector2;
   velocity: Vector2;
   acceleration: Vector2;
-  force: Vector2;
+  force: Vector2; // Net force
   
+  // Detailed Force Analysis (visual only, calculated per frame)
+  forceComponents?: Record<string, Vector2>; 
+
   // Research & Control
   constantForce: Vector2; // Continuous applied force
   showTrajectory: boolean;
@@ -51,6 +54,9 @@ export interface PhysicsBody {
   height?: number; // For Box
   vertices?: Vector2[]; // For Polygon (Local coordinates relative to position)
   normal?: Vector2; // For Plane
+  
+  // Special Flags
+  isParticle?: boolean; // If true, renders as a point, ignores radius for visual
   
   // Arc Specific
   arcStartAngle?: number; // Radians
@@ -90,15 +96,32 @@ export interface Constraint {
 export enum FieldType {
   UNIFORM_ELECTRIC = 'UNIFORM_ELECTRIC',
   UNIFORM_MAGNETIC = 'UNIFORM_MAGNETIC',
-  AREA_GRAVITY = 'AREA_GRAVITY'
+  AREA_GRAVITY = 'AREA_GRAVITY',
+  CUSTOM = 'CUSTOM' // Custom math function
+}
+
+export enum FieldShape {
+  BOX = 'BOX',
+  CIRCLE = 'CIRCLE',
+  POLYGON = 'POLYGON'
 }
 
 export interface PhysicsField {
   id: string;
   type: FieldType;
-  position: Vector2; // Top-left or center
-  size: Vector2; // Width/Height
-  strength: Vector2 | number; // Vector for E-field, Scalar for B-field
+  shape: FieldShape;
+  position: Vector2; // Top-left for Box, Center for Circle
+  size: Vector2; // Width/Height for Box
+  radius?: number; // For Circle
+  vertices?: Vector2[]; // For Polygon (World Space)
+  strength: Vector2 | number; // Vector for E-field/Gravity, Scalar for B-field
+  
+  // Custom equations strings (e.g. "Math.sin(x)")
+  equations?: {
+    ex: string;
+    ey: string;
+  };
+
   visible: boolean;
 }
 
@@ -110,6 +133,7 @@ export interface SimulationState {
   paused: boolean;
   gravity: Vector2;
   selectedBodyId: string | null;
+  selectedFieldId: string | null;
   camera: {
     x: number;
     y: number;

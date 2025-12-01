@@ -1,11 +1,11 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Play, Pause, RotateCcw, MousePointer2, Circle, Square, Triangle, Camera, Download, Link, Eclipse, MoveRight, Upload, Zap, Activity, BarChart2, TrendingUp, Navigation, ArrowRight, Gauge, Layers, Plus, Minus, Scan } from 'lucide-react';
+import { Play, Pause, RotateCcw, MousePointer2, Circle, Square, Triangle, Camera, Download, Link, Eclipse, MoveRight, Upload, Zap, Activity, Minus, Plus, Scan, Crosshair, Disc, Layers, ChevronDown, ChevronRight, Magnet, Globe } from 'lucide-react';
 import SimulationCanvas, { CanvasRef } from './components/SimulationCanvas';
 import PropertiesPanel from './components/PropertiesPanel';
 import DataCharts from './components/DataCharts';
 import { PhysicsEngine } from './services/physicsEngine';
-import { BodyType, PhysicsBody, SimulationState, FieldType, Vector2, ConstraintType } from './types';
+import { BodyType, PhysicsBody, SimulationState, Vector2, ConstraintType, FieldType, PhysicsField, FieldShape } from './types';
 import { Vec2 } from './services/vectorMath';
 
 // Initial State
@@ -17,11 +17,12 @@ const INITIAL_STATE: SimulationState = {
   paused: true,
   gravity: { x: 0, y: 10 },
   selectedBodyId: null,
-  camera: { x: window.innerWidth / 2, y: window.innerHeight / 2, zoom: 1 }
+  selectedFieldId: null,
+  camera: { x: 0, y: 0, zoom: 1 } // Origin at top-left
 };
 
 interface ArcBuilder {
-    phase: 0 | 1 | 2; // 0: Set Center, 1: Set Radius, 2: Set Angle
+    phase: 0 | 1 | 2; 
     center: Vector2;
     radius: number;
     startAngle: number;
@@ -34,7 +35,7 @@ interface RampBuilder {
 
 const App: React.FC = () => {
   const [state, setState] = useState<SimulationState>(INITIAL_STATE);
-  const [dragMode, setDragMode] = useState<'pan' | 'select' | 'add_circle' | 'add_box' | 'add_triangle' | 'add_arc' | 'add_conveyor' | 'add_ramp' | 'add_spring' | 'add_rod' | 'add_pin' | 'tool_traj' | 'tool_velocity' | 'tool_force'>('select');
+  const [dragMode, setDragMode] = useState<string>('select');
   const [arcBuilder, setArcBuilder] = useState<ArcBuilder | null>(null);
   const [rampBuilder, setRampBuilder] = useState<RampBuilder | null>(null);
   const [constraintBuilder, setConstraintBuilder] = useState<string | null>(null); // Holds first body ID
@@ -88,25 +89,27 @@ const App: React.FC = () => {
 
   const handleTogglePause = () => setState(s => ({ ...s, paused: !s.paused }));
   const handleReset = () => setState({ ...INITIAL_STATE, camera: state.camera });
-  const handleResetView = () => setState(s => ({ ...s, camera: { x: window.innerWidth / 2, y: window.innerHeight / 2, zoom: 1 } }));
+  const handleResetView = () => setState(s => ({ ...s, camera: { x: 0, y: 0, zoom: 1 } }));
   
   const handleSelectBody = (id: string | null) => {
-      // Logic to toggle trajectory if tool is active
       if (dragMode === 'tool_traj' && id) {
           setState(s => ({
               ...s,
               bodies: s.bodies.map(b => b.id === id ? { ...b, showTrajectory: !b.showTrajectory } : b)
           }));
       } else {
-          setState(s => ({ ...s, selectedBodyId: id }));
+          setState(s => ({ ...s, selectedBodyId: id, selectedFieldId: null }));
       }
   };
 
-  // Zoom Handler
+  const handleSelectField = (id: string | null) => {
+      setState(s => ({ ...s, selectedFieldId: id, selectedBodyId: null }));
+  };
+
   const handleZoom = (deltaY: number, mouseX: number, mouseY: number) => {
       setState(s => {
           const scale = deltaY > 0 ? 0.9 : 1.1;
-          const newZoom = Math.max(0.1, Math.min(5, s.camera.zoom * scale));
+          const newZoom = Math.max(0.01, Math.min(20, s.camera.zoom * scale)); // Wider zoom range
           
           const worldMouseX = (mouseX - s.camera.x) / s.camera.zoom;
           const worldMouseY = (mouseY - s.camera.y) / s.camera.zoom;
@@ -123,10 +126,9 @@ const App: React.FC = () => {
 
   const setZoom = (z: number) => {
       setState(s => {
-          const newZoom = Math.max(0.1, Math.min(5, z));
+          const newZoom = Math.max(0.01, Math.min(20, z));
           const cx = window.innerWidth / 2;
           const cy = window.innerHeight / 2;
-          // Zoom towards center of screen approximately
           const worldCx = (cx - s.camera.x) / s.camera.zoom;
           const worldCy = (cy - s.camera.y) / s.camera.zoom;
           const newCamX = cx - worldCx * newZoom;
@@ -144,9 +146,9 @@ const App: React.FC = () => {
                   return {
                       ...b,
                       position: pos,
-                      velocity: { x: 0, y: 0 }, // Reset velocity
+                      velocity: { x: 0, y: 0 }, 
                       angularVelocity: 0,
-                      trail: [] // Reset trail on move
+                      trail: [] 
                   };
               }
               return b;
@@ -165,6 +167,29 @@ const App: React.FC = () => {
               return b;
           })
       }));
+  };
+
+  const handleAddField = (pos: Vector2, shape: FieldShape, vertices?: Vector2[]) => {
+      const newField: PhysicsField = {
+          id: `field_${Date.now()}`,
+          type: FieldType.UNIFORM_ELECTRIC, // Default
+          shape: shape,
+          position: pos,
+          size: vertices && vertices.length === 1 ? vertices[0] : {x: 200, y: 200}, // Vertices[0] carries size for box
+          radius: vertices && vertices.length === 1 ? vertices[0].x : 100, // Vertices[0].x carries radius for circle
+          vertices: shape === FieldShape.POLYGON ? vertices : undefined,
+          strength: { x: 10, y: 0 },
+          equations: { ex: "Math.sin(x/50) * 50", ey: "0" }, // Default equations
+          visible: true
+      };
+
+      setState(s => ({
+          ...s,
+          fields: [newField, ...s.fields], // Add to front (bottom layer conceptually, though render order handles it)
+          selectedFieldId: newField.id,
+          selectedBodyId: null
+      }));
+      setDragMode('select');
   };
 
   const handleAddBody = (pos: Vector2) => {
@@ -188,7 +213,7 @@ const App: React.FC = () => {
                 mass: 0, inverseMass: 0, restitution: 1.0, friction: 0.5, charge: 0,
                 angle: angle, angularVelocity: 0, momentInertia: 0, inverseInertia: 0,
                 width: length,
-                height: 5, // Thinner ramp
+                height: 5, 
                 color: rampBuilder.isConveyor ? '#8b5cf6' : '#94a3b8', 
                 selected: true, showTrajectory: false, trail: [],
                 showCharge: true
@@ -196,7 +221,7 @@ const App: React.FC = () => {
             
             if (rampBuilder.isConveyor) {
                 newBody.surfaceSpeed = 50; 
-                newBody.height = 10; // Conveyors slightly thicker
+                newBody.height = 10; 
             }
 
             setState(s => ({ ...s, bodies: [...s.bodies, newBody], selectedBodyId: newBody.id }));
@@ -217,8 +242,6 @@ const App: React.FC = () => {
         } else if (arcBuilder.phase === 2) {
             const angle = Math.atan2(pos.y - arcBuilder.center.y, pos.x - arcBuilder.center.x);
             
-            // Check if user clicked back near the start point (Full Circle)
-            // Use distance of mouse to start point
             const startPoint = {
                 x: arcBuilder.center.x + arcBuilder.radius * Math.cos(arcBuilder.startAngle),
                 y: arcBuilder.center.y + arcBuilder.radius * Math.sin(arcBuilder.startAngle)
@@ -227,11 +250,8 @@ const App: React.FC = () => {
             
             let finalEndAngle = angle;
             if (distToStart < 20) {
-                // If close to start, make it a full loop
                 finalEndAngle = arcBuilder.startAngle + 2 * Math.PI;
             } else {
-                // Normalize for standard arc drawing direction if needed, but simplistic is fine
-                // Ensure end > start for simplicity in rendering if we want counter-clockwise
                 if (finalEndAngle < arcBuilder.startAngle) finalEndAngle += 2*Math.PI;
             }
 
@@ -256,10 +276,12 @@ const App: React.FC = () => {
         return;
     }
 
-    // Constraint Creation Logic (Spring, Rod)
     if (dragMode === 'add_spring' || dragMode === 'add_rod' || dragMode === 'add_pin') {
         const clickedBody = state.bodies.slice().reverse().find(b => {
-             if (b.type === BodyType.CIRCLE) return Vec2.dist(pos, b.position) < (b.radius || 20);
+             if (b.type === BodyType.CIRCLE) {
+                 const hitR = b.isParticle ? 10 : (b.radius || 20);
+                 return Vec2.dist(pos, b.position) < hitR;
+             }
              if (b.type === BodyType.BOX) {
                  const w = b.width || 40; const h = b.height || 40;
                  return pos.x > b.position.x - w/2 && pos.x < b.position.x + w/2 && pos.y > b.position.y - h/2 && pos.y < b.position.y + h/2;
@@ -278,7 +300,6 @@ const App: React.FC = () => {
                      const bodyA = state.bodies.find(b => b.id === constraintBuilder)!;
                      const bodyB = clickedBody;
                      
-                     // Use Center of Mass anchor
                      const dist = Vec2.dist(bodyA.position, bodyB.position);
 
                      const newConstraint = {
@@ -301,8 +322,7 @@ const App: React.FC = () => {
         return;
     }
 
-    // Do not create body if in a tool mode
-    if (dragMode.startsWith('tool_')) return;
+    if (dragMode.startsWith('tool_') || dragMode.startsWith('add_field_')) return;
 
     const newId = `body_${Date.now()}`;
     let newBody: PhysicsBody = {
@@ -331,7 +351,14 @@ const App: React.FC = () => {
             { x: size * Math.cos(Math.PI/6), y: size * Math.sin(Math.PI/6) },
             { x: -size * Math.cos(Math.PI/6), y: size * Math.sin(Math.PI/6) }
         ];
+    } else if (dragMode === 'add_particle') {
+        newBody.isParticle = true;
+        newBody.radius = 5; // Very small for physics
+        newBody.mass = 1;
+        newBody.inverseMass = 1;
+        newBody.color = '#facc15';
     } else {
+        // Standard Ball
         newBody.radius = 20;
     }
     
@@ -350,6 +377,13 @@ const App: React.FC = () => {
     }));
   };
 
+  const handleUpdateField = (id: string, updates: Partial<PhysicsField>) => {
+      setState(s => ({
+          ...s,
+          fields: s.fields.map(f => f.id === id ? { ...f, ...updates } : f)
+      }));
+  };
+
   const handleDeleteBody = (id: string) => {
     setState(s => ({
         ...s,
@@ -358,6 +392,14 @@ const App: React.FC = () => {
         selectedBodyId: s.selectedBodyId === id ? null : s.selectedBodyId
     }));
     if (pinnedBodyId === id) setPinnedBodyId(null);
+  };
+
+  const handleDeleteField = (id: string) => {
+      setState(s => ({
+          ...s,
+          fields: s.fields.filter(f => f.id !== id),
+          selectedFieldId: s.selectedFieldId === id ? null : s.selectedFieldId
+      }));
   };
 
   const handleSaveScene = () => {
@@ -420,63 +462,59 @@ const App: React.FC = () => {
       />
 
       {/* LEFT: Toolbar */}
-      <div className="w-16 bg-slate-900 border-r border-slate-800 flex flex-col items-center py-4 gap-2 z-10 shadow-xl overflow-y-auto custom-scrollbar">
+      <div className="w-16 bg-slate-900 border-r border-slate-800 flex flex-col items-center py-4 gap-2 z-10 shadow-xl overflow-y-auto custom-scrollbar shrink-0">
         <div className="mb-2 shrink-0">
              <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center font-bold text-white text-sm shadow-lg shadow-blue-900/20">Ph</div>
         </div>
 
-        {/* General */}
         <div className="w-full flex flex-col items-center gap-1">
-             <div className="text-[9px] text-slate-500 font-bold uppercase tracking-wider mb-1 scale-75">通用</div>
              <ToolBtn icon={<MousePointer2 size={18} />} active={dragMode === 'select'} onClick={setClear} tooltip="选择 (Select)" />
-             <ToolBtn icon={<Navigation size={18} />} active={dragMode === 'pan'} onClick={() => setDragMode('pan')} tooltip="平移 (Pan)" />
         </div>
         
         <div className="w-8 h-px bg-slate-800 my-1 shrink-0"></div>
 
-        {/* Objects */}
-        <div className="w-full flex flex-col items-center gap-1">
-             <div className="text-[9px] text-slate-500 font-bold uppercase tracking-wider mb-1 scale-75">物体</div>
-             <ToolBtn icon={<Circle size={18} />} active={dragMode === 'add_circle'} onClick={() => setDragMode('add_circle')} tooltip="小球 (Ball)" />
+        {/* Collapsible Groups */}
+        <ToolGroup title="物体" defaultExpanded={false}>
+             <ToolBtn icon={<Circle size={18} />} active={dragMode === 'add_ball'} onClick={() => setDragMode('add_ball')} tooltip="小球 (Ball)" />
+             <ToolBtn icon={<Crosshair size={18} />} active={dragMode === 'add_particle'} onClick={() => setDragMode('add_particle')} tooltip="质点 (Particle)" />
              <ToolBtn icon={<Square size={18} />} active={dragMode === 'add_box'} onClick={() => setDragMode('add_box')} tooltip="方块 (Block)" />
              <ToolBtn icon={<Triangle size={18} />} active={dragMode === 'add_triangle'} onClick={() => setDragMode('add_triangle')} tooltip="多边形 (Poly)" />
              <ToolBtn icon={<Layers size={18} />} active={dragMode === 'add_ramp'} onClick={() => setDragMode('add_ramp')} tooltip="斜面/地面 (Ramp/Plane)" />
              <ToolBtn icon={<Eclipse size={18} />} active={dragMode === 'add_arc'} onClick={() => setDragMode('add_arc')} tooltip="轨道 (Track)" />
              <ToolBtn icon={<MoveRight size={18} />} active={dragMode === 'add_conveyor'} onClick={() => setDragMode('add_conveyor')} tooltip="传送带 (Conveyor)" />
-        </div>
-        
-        <div className="w-8 h-px bg-slate-800 my-1 shrink-0"></div>
-        
-        {/* Constraints */}
-        <div className="w-full flex flex-col items-center gap-1">
-             <div className="text-[9px] text-slate-500 font-bold uppercase tracking-wider mb-1 scale-75">约束</div>
+        </ToolGroup>
+
+        <ToolGroup title="约束" defaultExpanded={false}>
              <ToolBtn icon={<Activity size={18} />} active={dragMode === 'add_spring'} onClick={() => setDragMode('add_spring')} tooltip="弹簧 (Spring)" />
              <ToolBtn icon={<Link size={18} />} active={dragMode === 'add_rod'} onClick={() => setDragMode('add_rod')} tooltip="杆 (Rod)" />
              <ToolBtn icon={<Zap size={18} />} active={dragMode === 'add_pin'} onClick={() => setDragMode('add_pin')} tooltip="铰链 (Pin)" />
-        </div>
+        </ToolGroup>
+        
+        <ToolGroup title="场" defaultExpanded={false}>
+             <ToolBtn icon={<Square size={18} />} active={dragMode === 'add_field_box'} onClick={() => setDragMode('add_field_box')} tooltip="矩形场 (Box Field)" />
+             <ToolBtn icon={<Circle size={18} />} active={dragMode === 'add_field_circle'} onClick={() => setDragMode('add_field_circle')} tooltip="圆形场 (Circle Field)" />
+             <ToolBtn icon={<Triangle size={18} />} active={dragMode === 'add_field_poly'} onClick={() => setDragMode('add_field_poly')} tooltip="多边形场 (Poly Field)" />
+        </ToolGroup>
 
-        <div className="w-8 h-px bg-slate-800 my-1 shrink-0"></div>
+        <ToolGroup title="工具" defaultExpanded={false}>
+             <ToolBtn icon={<Disc size={18} />} active={dragMode === 'tool_traj'} onClick={() => setDragMode('tool_traj')} tooltip="轨迹开关 (Trail Toggle)" />
+             <ToolBtn icon={<Scan size={18} />} active={dragMode === 'tool_velocity'} onClick={() => setDragMode('tool_velocity')} tooltip="设置初速度 (Velocity)" />
+             <ToolBtn icon={<Magnet size={18} />} active={dragMode === 'tool_force'} onClick={() => setDragMode('tool_force')} tooltip="设置恒力 (Force)" />
+        </ToolGroup>
 
-        {/* Research */}
-        <div className="w-full flex flex-col items-center gap-1">
-             <div className="text-[9px] text-slate-500 font-bold uppercase tracking-wider mb-1 scale-75">研究</div>
-             <ToolBtn icon={<TrendingUp size={18} />} active={dragMode === 'tool_traj'} onClick={() => setDragMode('tool_traj')} tooltip="轨迹开关 (Trail Toggle)" />
-             <ToolBtn icon={<ArrowRight size={18} />} active={dragMode === 'tool_velocity'} onClick={() => setDragMode('tool_velocity')} tooltip="设置初速度 (Velocity)" />
-             <ToolBtn icon={<Gauge size={18} />} active={dragMode === 'tool_force'} onClick={() => setDragMode('tool_force')} tooltip="设置恒力 (Force)" />
-        </div>
       </div>
 
       {/* CENTER: Canvas */}
-      <div className="flex-1 flex flex-col relative">
-        <div className="h-14 bg-slate-900 border-b border-slate-800 flex items-center px-4 justify-between z-10 shadow-sm gap-4">
+      <div className="flex-1 flex flex-col relative min-w-0">
+        <div className="h-14 bg-slate-900 border-b border-slate-800 flex items-center px-4 justify-between z-10 shadow-sm gap-4 overflow-x-auto">
             {/* Play Controls */}
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center space-x-2 shrink-0">
                 <button 
                     onClick={handleTogglePause}
                     className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium text-sm transition shadow-lg ${state.paused ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-900/20' : 'bg-amber-600 hover:bg-amber-500 text-white shadow-amber-900/20'}`}
                 >
                     {state.paused ? <Play size={16} fill="currentColor" /> : <Pause size={16} fill="currentColor" />}
-                    <span>{state.paused ? "运行" : "暂停"}</span>
+                    <span className="hidden sm:inline">{state.paused ? "运行" : "暂停"}</span>
                 </button>
                 <button 
                     onClick={handleReset}
@@ -488,7 +526,7 @@ const App: React.FC = () => {
             </div>
 
             {/* View Controls (Zoom/Reset) */}
-             <div className="flex items-center space-x-2 bg-slate-800/30 px-2 py-1 rounded border border-slate-800">
+             <div className="flex items-center space-x-2 bg-slate-800/30 px-2 py-1 rounded border border-slate-800 shrink-0">
                 <button 
                     onClick={() => setZoom(state.camera.zoom - 0.2)}
                     className="p-1 hover:bg-slate-700 rounded text-slate-400 hover:text-white"
@@ -496,10 +534,10 @@ const App: React.FC = () => {
                     <Minus size={14} />
                 </button>
                 <input 
-                    type="range" min="0.1" max="3" step="0.1"
+                    type="range" min="0.1" max="5" step="0.1"
                     value={state.camera.zoom}
                     onChange={(e) => setZoom(parseFloat(e.target.value))}
-                    className="w-24 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer"
+                    className="w-16 sm:w-24 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer"
                 />
                 <button 
                     onClick={() => setZoom(state.camera.zoom + 0.2)}
@@ -518,14 +556,14 @@ const App: React.FC = () => {
             </div>
 
             {/* Presets & Gravity */}
-            <div className="flex items-center space-x-4 bg-slate-800/30 px-3 py-1 rounded border border-slate-800">
+            <div className="hidden md:flex items-center space-x-4 bg-slate-800/30 px-3 py-1 rounded border border-slate-800 shrink-0">
                 <div className="flex items-center space-x-2 border-r border-slate-700 pr-3">
                     <span className="text-[10px] text-slate-500 uppercase tracking-wider">重力 g</span>
                     <input 
                         type="range" min="0" max="30" step="1" 
                         value={state.gravity.y}
                         onChange={(e) => setState(s => ({...s, gravity: {x:0, y: Number(e.target.value)}}))}
-                        className="w-20 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer"
+                        className="w-16 lg:w-20 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer"
                     />
                     <span className="text-xs font-mono w-8 text-right">{state.gravity.y}</span>
                 </div>
@@ -539,7 +577,7 @@ const App: React.FC = () => {
             </div>
 
             {/* File Operations */}
-            <div className="flex space-x-2">
+            <div className="flex space-x-1 sm:space-x-2 shrink-0">
                  <button onClick={() => canvasRef.current?.exportImage()} className="p-2 text-slate-400 hover:text-white transition" title="截图">
                     <Camera size={18} />
                  </button>
@@ -557,11 +595,14 @@ const App: React.FC = () => {
                 ref={canvasRef}
                 state={state} 
                 onSelectBody={handleSelectBody}
+                onSelectField={handleSelectField}
                 onAddBody={handleAddBody}
+                onAddField={handleAddField}
                 onMoveBody={handleBodyMove}
                 onVectorEdit={handleVectorEdit}
                 dragMode={dragMode}
                 onZoom={handleZoom}
+                onPauseToggle={(p) => setState(s => ({...s, paused: p}))}
                 arcCreation={arcBuilder ? { 
                     phase: arcBuilder.phase, 
                     center: arcBuilder.center, 
@@ -572,9 +613,8 @@ const App: React.FC = () => {
                 constraintBuilder={constraintBuilder}
              />
              
-             {/* Pinned Chart Overlay */}
              {pinnedBodyId && (
-                 <div className="absolute top-4 right-4 w-96 bg-slate-900/90 border border-slate-700 rounded-xl shadow-2xl backdrop-blur-sm z-20 overflow-hidden flex flex-col p-3 ring-1 ring-slate-700">
+                 <div className="absolute top-4 right-4 w-80 md:w-96 bg-slate-900/90 border border-slate-700 rounded-xl shadow-2xl backdrop-blur-sm z-20 overflow-hidden flex flex-col p-3 ring-1 ring-slate-700">
                     <div className="flex justify-between items-center mb-2">
                         <span className="text-xs font-bold text-slate-300 uppercase tracking-wider">固定视图 (Pinned)</span>
                     </div>
@@ -587,11 +627,11 @@ const App: React.FC = () => {
                  </div>
              )}
 
-             {/* HUD Messages */}
              <div className="absolute top-4 left-4 pointer-events-none flex flex-col items-start space-y-2">
                  {dragMode === 'tool_traj' && <div className="hud-badge bg-blue-600">点击物体切换轨迹显示</div>}
-                 {dragMode === 'tool_velocity' && <div className="hud-badge bg-blue-600">拖拽物体设置初速度</div>}
-                 {dragMode === 'tool_force' && <div className="hud-badge bg-red-600">拖拽物体设置恒力</div>}
+                 {dragMode === 'tool_velocity' && <div className="hud-badge bg-blue-600">点击物体 -> 拖拽设置初速度</div>}
+                 {dragMode === 'tool_force' && <div className="hud-badge bg-red-600">点击物体 -> 拖拽设置恒力</div>}
+                 {dragMode.startsWith('add_field_') && <div className="hud-badge bg-emerald-600">拖拽绘制场区域</div>}
                  
                  {constraintBuilder && (
                      <div className="hud-badge bg-amber-600 animate-pulse">
@@ -606,12 +646,15 @@ const App: React.FC = () => {
       </div>
 
       {/* RIGHT: Properties */}
-      <div className="w-80 bg-slate-900 border-l border-slate-800 flex flex-col z-10 shadow-2xl">
-        <div className="flex-1 overflow-y-auto">
+      <div className="w-72 lg:w-80 bg-slate-900 border-l border-slate-800 flex flex-col z-10 shadow-2xl shrink-0">
+        <div className="flex-1 overflow-y-auto custom-scrollbar">
             <PropertiesPanel 
                 body={state.bodies.find(b => b.id === state.selectedBodyId) || null} 
-                onUpdate={handleUpdateBody}
-                onDelete={handleDeleteBody}
+                field={state.fields.find(f => f.id === state.selectedFieldId) || null}
+                onUpdateBody={handleUpdateBody}
+                onUpdateField={handleUpdateField}
+                onDeleteBody={handleDeleteBody}
+                onDeleteField={handleDeleteField}
             />
         </div>
         <div className="border-t border-slate-800 bg-slate-900 p-4 shrink-0">
@@ -627,11 +670,30 @@ const App: React.FC = () => {
   );
 };
 
-const ToolBtn: React.FC<{icon: React.ReactNode, active: boolean, onClick: () => void, tooltip: string}> = ({ icon, active, onClick, tooltip }) => (
+const ToolGroup: React.FC<{title: string, children: React.ReactNode, defaultExpanded: boolean}> = ({ title, children, defaultExpanded }) => {
+    const [expanded, setExpanded] = useState(defaultExpanded);
+    return (
+        <div className="w-full flex flex-col items-center gap-1">
+            <button 
+                onClick={() => setExpanded(!expanded)} 
+                className="w-full flex items-center justify-center py-1 hover:bg-slate-800 rounded transition"
+            >
+                {expanded ? <ChevronDown size={12} className="text-slate-500" /> : <ChevronRight size={12} className="text-slate-500" />}
+            </button>
+            {expanded && (
+                <div className="flex flex-col items-center gap-1 animate-in slide-in-from-top-2 duration-200">
+                    {children}
+                </div>
+            )}
+        </div>
+    );
+};
+
+const ToolBtn: React.FC<{icon: React.ReactNode, active: boolean, onClick: () => void, tooltip: string, className?: string}> = ({ icon, active, onClick, tooltip, className }) => (
     <button 
         onClick={onClick}
         title={tooltip}
-        className={`p-2 rounded-lg transition-all duration-200 group relative shrink-0 ${active ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}
+        className={`p-2 rounded-lg transition-all duration-200 group relative shrink-0 ${active ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'} ${className}`}
     >
         {icon}
         <span className="absolute left-14 top-1.5 bg-slate-800 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition pointer-events-none whitespace-nowrap z-50 border border-slate-700 shadow-xl">
