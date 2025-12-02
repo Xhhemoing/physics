@@ -5,7 +5,7 @@ import SimulationCanvas, { CanvasRef } from './components/SimulationCanvas';
 import PropertiesPanel from './components/PropertiesPanel';
 import DataCharts from './components/DataCharts';
 import { PhysicsEngine } from './services/physicsEngine';
-import { BodyType, PhysicsBody, SimulationState, Vector2, ConstraintType, FieldType, PhysicsField, FieldShape } from './types';
+import { BodyType, PhysicsBody, SimulationState, Vector2, ConstraintType, FieldType, PhysicsField, FieldShape, Constraint } from './types';
 import { Vec2 } from './services/vectorMath';
 
 // Initial State
@@ -106,7 +106,7 @@ const App: React.FC = () => {
   const handleSelectField = (id: string | null) => {
       setState(s => ({ ...s, selectedFieldId: id, selectedBodyId: null, selectedConstraintId: null }));
   };
-
+  
   const handleSelectConstraint = (id: string | null) => {
       setState(s => ({ ...s, selectedConstraintId: id, selectedBodyId: null, selectedFieldId: null }));
   };
@@ -205,34 +205,32 @@ const App: React.FC = () => {
             setRampBuilder({ start: pos, isConveyor: dragMode === 'add_conveyor' });
         } else {
             const start = rampBuilder.start;
-            const end = pos; // Use snapped pos directly
+            const end = pos; // Note: This pos is already snapped by SimulationCanvas now
             const center = Vec2.mul(Vec2.add(start, end), 0.5);
             const delta = Vec2.sub(end, start);
             const length = Vec2.mag(delta);
             const angle = Math.atan2(delta.y, delta.x);
 
-            if (length > 1) { // Avoid zero length
-                const newBody: PhysicsBody = {
-                    id: `ramp_${Date.now()}`,
-                    type: BodyType.BOX,
-                    position: center,
-                    velocity: {x:0, y:0}, acceleration: {x:0, y:0}, force: {x:0, y:0}, constantForce: {x:0, y:0},
-                    mass: 0, inverseMass: 0, restitution: 1.0, friction: 0.5, charge: 0,
-                    angle: angle, angularVelocity: 0, momentInertia: 0, inverseInertia: 0,
-                    width: length,
-                    height: 5, 
-                    color: rampBuilder.isConveyor ? '#8b5cf6' : '#94a3b8', 
-                    selected: true, showTrajectory: false, trail: [],
-                    showCharge: true, showVelocity: false, showForce: false
-                };
-                
-                if (rampBuilder.isConveyor) {
-                    newBody.surfaceSpeed = 50; 
-                    newBody.height = 10; 
-                }
-
-                setState(s => ({ ...s, bodies: [...s.bodies, newBody], selectedBodyId: newBody.id }));
+            const newBody: PhysicsBody = {
+                id: `ramp_${Date.now()}`,
+                type: BodyType.BOX,
+                position: center,
+                velocity: {x:0, y:0}, acceleration: {x:0, y:0}, force: {x:0, y:0}, constantForce: {x:0, y:0},
+                mass: 0, inverseMass: 0, restitution: 1.0, friction: 0.5, charge: 0,
+                angle: angle, angularVelocity: 0, momentInertia: 0, inverseInertia: 0,
+                width: length,
+                height: 5, 
+                color: rampBuilder.isConveyor ? '#8b5cf6' : '#94a3b8', 
+                selected: true, showTrajectory: false, trail: [],
+                showCharge: true
+            };
+            
+            if (rampBuilder.isConveyor) {
+                newBody.surfaceSpeed = 50; 
+                newBody.height = 10; 
             }
+
+            setState(s => ({ ...s, bodies: [...s.bodies, newBody], selectedBodyId: newBody.id }));
             setRampBuilder(null);
             setDragMode('select');
         }
@@ -244,21 +242,21 @@ const App: React.FC = () => {
         if (!arcBuilder) {
             setArcBuilder({ phase: 1, center: pos, radius: 0, startAngle: 0 });
         } else if (arcBuilder.phase === 1) {
+            // Phase 1 -> 2: Define Radius. Start Angle Defaults to 0 (Right).
             const r = Vec2.dist(arcBuilder.center, pos);
-            const startAngle = Math.atan2(pos.y - arcBuilder.center.y, pos.x - arcBuilder.center.x);
-            setArcBuilder({ ...arcBuilder, phase: 2, radius: r, startAngle: startAngle });
+            setArcBuilder({ ...arcBuilder, phase: 2, radius: r, startAngle: 0 });
         } else if (arcBuilder.phase === 2) {
+            // Phase 2 -> 3: Define End Angle based on mouse position
             const angle = Math.atan2(pos.y - arcBuilder.center.y, pos.x - arcBuilder.center.x);
             
-            // Logic to determine end angle relative to start angle
-            // Normalize angles 0 to 2PI
-            const norm = (a: number) => (a % (2*Math.PI) + 2*Math.PI) % (2*Math.PI);
+            // Normalize angles for logic
+            let start = arcBuilder.startAngle; // 0
+            let end = angle;
             
-            // If dragging very close to start, make full circle
-            let finalEndAngle = angle;
-            if (Math.abs(norm(angle) - norm(arcBuilder.startAngle)) < 0.1) {
-                finalEndAngle = arcBuilder.startAngle + 2 * Math.PI - 0.01;
-            }
+            // Ensure end > start for simplicity or handle wrap logic
+            // Math.atan2 returns -PI to PI.
+            // If user clicks above, end is neg.
+            if (end < start) end += 2 * Math.PI;
 
             const newBody: PhysicsBody = {
                 id: `arc_${Date.now()}`,
@@ -268,10 +266,10 @@ const App: React.FC = () => {
                 mass: 0, inverseMass: 0, restitution: 1.0, friction: 0.5, charge: 0,
                 angle: 0, angularVelocity: 0, momentInertia: 0, inverseInertia: 0,
                 radius: arcBuilder.radius,
-                arcStartAngle: arcBuilder.startAngle,
-                arcEndAngle: finalEndAngle,
+                arcStartAngle: start,
+                arcEndAngle: end,
                 color: '#e2e8f0', selected: true, showTrajectory: false, trail: [],
-                showCharge: true, showVelocity: false, showForce: false
+                showCharge: true
             };
             
             setState(s => ({ ...s, bodies: [...s.bodies, newBody], selectedBodyId: newBody.id }));
@@ -282,16 +280,17 @@ const App: React.FC = () => {
     }
 
     if (dragMode === 'add_spring' || dragMode === 'add_rod' || dragMode === 'add_pin') {
+        // Find body under mouse (copied logic from SimulationCanvas hit test basically)
         const clickedBody = state.bodies.slice().reverse().find(b => {
-             // Basic hit test to find body under cursor for constraint
              if (b.type === BodyType.CIRCLE) {
                  const hitR = b.isParticle ? 10 : (b.radius || 20);
                  return Vec2.dist(pos, b.position) < hitR;
              }
              if (b.type === BodyType.BOX) {
-                 const localPos = Vec2.rotate(Vec2.sub(pos, b.position), -b.angle);
+                 // Simple AABB for connecting is okay, or improved OBB check
+                 // Let's use simple distance for center-based connection or AABB
                  const w = b.width || 40; const h = b.height || 40;
-                 return Math.abs(localPos.x) < w/2 && Math.abs(localPos.y) < h/2;
+                 return pos.x > b.position.x - w/2 && pos.x < b.position.x + w/2 && pos.y > b.position.y - h/2 && pos.y < b.position.y + h/2;
              }
              return false;
         });
@@ -307,9 +306,6 @@ const App: React.FC = () => {
                      const bodyA = state.bodies.find(b => b.id === constraintBuilder)!;
                      const bodyB = clickedBody;
                      
-                     // Calculate local anchors based on world click positions? 
-                     // For simplicity, snapping to center is default, but for Box/Rod often surface is better.
-                     // Current impl snaps to center for stability.
                      const dist = Vec2.dist(bodyA.position, bodyB.position);
 
                      const newConstraint = {
@@ -375,9 +371,7 @@ const App: React.FC = () => {
     setState(s => ({
         ...s,
         bodies: [...s.bodies, newBody],
-        selectedBodyId: newId,
-        selectedFieldId: null,
-        selectedConstraintId: null
+        selectedBodyId: newId
     }));
     setDragMode('select'); 
   };
@@ -396,7 +390,7 @@ const App: React.FC = () => {
       }));
   };
   
-  const handleUpdateConstraint = (id: string, updates: Partial<any>) => {
+  const handleUpdateConstraint = (id: string, updates: Partial<Constraint>) => {
       setState(s => ({
           ...s,
           constraints: s.constraints.map(c => c.id === id ? { ...c, ...updates } : c)
@@ -420,12 +414,12 @@ const App: React.FC = () => {
           selectedFieldId: s.selectedFieldId === id ? null : s.selectedFieldId
       }));
   };
-
+  
   const handleDeleteConstraint = (id: string) => {
       setState(s => ({
           ...s,
           constraints: s.constraints.filter(c => c.id !== id),
-          selectedConstraintId: null
+          selectedConstraintId: s.selectedConstraintId === id ? null : s.selectedConstraintId
       }));
   };
 

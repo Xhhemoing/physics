@@ -5,17 +5,18 @@ import { PhysicsBody, BodyType, PhysicsField, FieldType, Vector2, FieldShape, Co
 interface Props {
   body: PhysicsBody | null;
   field: PhysicsField | null;
-  constraint: Constraint | null;
+  constraint: Constraint | null; // Added
   onUpdateBody: (id: string, updates: Partial<PhysicsBody>) => void;
   onUpdateField: (id: string, updates: Partial<PhysicsField>) => void;
-  onUpdateConstraint: (id: string, updates: Partial<Constraint>) => void;
+  onUpdateConstraint: (id: string, updates: Partial<Constraint>) => void; // Added
   onDeleteBody: (id: string) => void;
   onDeleteField: (id: string) => void;
-  onDeleteConstraint: (id: string) => void;
+  onDeleteConstraint: (id: string) => void; // Added
 }
 
 const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBody, onUpdateField, onUpdateConstraint, onDeleteBody, onDeleteField, onDeleteConstraint }) => {
   
+  // --- Constraint Panel ---
   if (constraint) {
       return (
           <div className="p-4 space-y-5">
@@ -23,7 +24,10 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
                 <div>
                     <span className="text-xs text-slate-500 uppercase tracking-wider block">当前选择 (Constraint)</span>
                     <div className="flex items-center gap-2">
-                        <h2 className="font-bold text-lg text-amber-500">{constraint.type === ConstraintType.SPRING ? "弹簧 (Spring)" : constraint.type === ConstraintType.ROD ? "杆 (Rod)" : "铰链 (Pin)"}</h2>
+                        <h2 className="font-bold text-lg text-amber-400">
+                            {constraint.type === ConstraintType.SPRING ? 'Spring' : 
+                             constraint.type === ConstraintType.ROD ? 'Rod' : 'Pin Joint'}
+                        </h2>
                     </div>
                 </div>
                 <button 
@@ -35,45 +39,53 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
               </div>
 
               <div className="space-y-4">
+                  {constraint.type === ConstraintType.SPRING && (
+                      <>
+                        <div>
+                            <label className="block text-[10px] text-slate-400 mb-1 uppercase">劲度系数 Stiffness (k)</label>
+                            <input 
+                                type="number" step="0.1"
+                                value={constraint.stiffness} 
+                                onChange={(e) => onUpdateConstraint(constraint.id, { stiffness: parseFloat(e.target.value) })}
+                                className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-[10px] text-slate-400 mb-1 uppercase">阻尼 Damping</label>
+                            <input 
+                                type="number" step="0.01"
+                                value={constraint.damping} 
+                                onChange={(e) => onUpdateConstraint(constraint.id, { damping: parseFloat(e.target.value) })}
+                                className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
+                            />
+                        </div>
+                      </>
+                  )}
+                  
                   {(constraint.type === ConstraintType.SPRING || constraint.type === ConstraintType.ROD) && (
                       <div>
-                          <label className="block text-[10px] text-slate-400 mb-1 uppercase">自然长度 Length (m)</label>
+                          <label className="block text-[10px] text-slate-400 mb-1 uppercase">长度 Length</label>
                           <input 
-                              type="number" min="0" step="1"
+                              type="number" step="1"
                               value={constraint.length} 
-                              onChange={(e) => onUpdateConstraint(constraint.id, { length: Math.max(0, parseFloat(e.target.value)) })}
+                              onChange={(e) => onUpdateConstraint(constraint.id, { length: parseFloat(e.target.value) })}
                               className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
                           />
                       </div>
                   )}
-
-                  {constraint.type === ConstraintType.SPRING && (
-                      <>
-                          <div>
-                              <label className="block text-[10px] text-slate-400 mb-1 uppercase">劲度系数 Stiffness (k)</label>
-                              <input 
-                                  type="number" min="0" step="0.1"
-                                  value={constraint.stiffness} 
-                                  onChange={(e) => onUpdateConstraint(constraint.id, { stiffness: Math.max(0, parseFloat(e.target.value)) })}
-                                  className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
-                              />
-                          </div>
-                          <div>
-                              <label className="block text-[10px] text-slate-400 mb-1 uppercase">阻尼 Damping</label>
-                              <input 
-                                  type="number" min="0" step="0.01"
-                                  value={constraint.damping} 
-                                  onChange={(e) => onUpdateConstraint(constraint.id, { damping: Math.max(0, parseFloat(e.target.value)) })}
-                                  className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
-                              />
-                          </div>
-                      </>
-                  )}
+                  
+                  <div className="p-2 bg-slate-800/30 rounded border border-slate-700">
+                      <p className="text-[10px] text-slate-500">
+                          连接对象 A: {constraint.bodyAId.split('_')[0]}...<br/>
+                          连接对象 B: {constraint.bodyBId.split('_')[0]}...
+                      </p>
+                  </div>
               </div>
           </div>
       );
   }
 
+  // --- Field Panel ---
   if (field) {
       return (
           <div className="p-4 space-y-5">
@@ -199,6 +211,7 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
       );
   }
 
+  // --- Body Panel ---
   if (!body) {
     return (
         <div className="p-4 text-slate-500 text-center text-sm flex flex-col items-center justify-center h-full opacity-50">
