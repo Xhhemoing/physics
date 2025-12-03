@@ -5,17 +5,29 @@ import { PhysicsBody, BodyType, PhysicsField, FieldType, Vector2, FieldShape, Co
 interface Props {
   body: PhysicsBody | null;
   field: PhysicsField | null;
-  constraint: Constraint | null; // Added
+  constraint: Constraint | null; 
   onUpdateBody: (id: string, updates: Partial<PhysicsBody>) => void;
   onUpdateField: (id: string, updates: Partial<PhysicsField>) => void;
-  onUpdateConstraint: (id: string, updates: Partial<Constraint>) => void; // Added
+  onUpdateConstraint: (id: string, updates: Partial<Constraint>) => void; 
   onDeleteBody: (id: string) => void;
   onDeleteField: (id: string) => void;
-  onDeleteConstraint: (id: string) => void; // Added
+  onDeleteConstraint: (id: string) => void; 
 }
 
 const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBody, onUpdateField, onUpdateConstraint, onDeleteBody, onDeleteField, onDeleteConstraint }) => {
   
+  // Helper to insert text into active textarea
+  const insertText = (text: string, axis: 'ex' | 'ey') => {
+      if (!field || field.type !== FieldType.CUSTOM) return;
+      const current = field.equations?.[axis] || "";
+      onUpdateField(field.id, { 
+          equations: { 
+              ...field.equations!, 
+              [axis]: current + text 
+          } 
+      });
+  };
+
   // --- Constraint Panel ---
   if (constraint) {
       return (
@@ -25,8 +37,8 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
                     <span className="text-xs text-slate-500 uppercase tracking-wider block">当前选择 (Constraint)</span>
                     <div className="flex items-center gap-2">
                         <h2 className="font-bold text-lg text-amber-400">
-                            {constraint.type === ConstraintType.SPRING ? 'Spring' : 
-                             constraint.type === ConstraintType.ROD ? 'Rod' : 'Pin Joint'}
+                            {constraint.type === ConstraintType.SPRING ? '弹簧 (Spring)' : 
+                             constraint.type === ConstraintType.ROD ? '刚性杆 (Rod)' : '销轴 (Pin Joint)'}
                         </h2>
                     </div>
                 </div>
@@ -93,7 +105,7 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
                 <div>
                     <span className="text-xs text-slate-500 uppercase tracking-wider block">当前选择 (Field)</span>
                     <div className="flex items-center gap-2">
-                        <h2 className="font-bold text-lg text-emerald-400">{field.shape} Field</h2>
+                        <h2 className="font-bold text-lg text-emerald-400">{field.shape} 场</h2>
                     </div>
                 </div>
                 <button 
@@ -121,9 +133,37 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
 
                   {field.type === FieldType.CUSTOM ? (
                       <div className="space-y-3 p-2 bg-slate-800/50 rounded border border-slate-700">
-                          <p className="text-[10px] text-slate-400">输入电场强度(E)关于 x, y, t 的方程。支持 Math 库 (sin, cos 等)。</p>
+                          <p className="text-[10px] text-slate-400">输入场强度(E/B)关于 x, y, t 的方程。支持 Math 库。</p>
+                          
+                          <div className="space-y-2">
+                             <div className="flex flex-wrap gap-1">
+                                {['sin(t)', 'cos(t)', 'x', 'y', 't', 'sqrt()', 'abs()'].map(fn => (
+                                    <button 
+                                        key={fn}
+                                        onClick={() => insertText(fn, 'ex')} 
+                                        className="bg-slate-700 hover:bg-slate-600 text-[10px] text-white rounded px-1.5 py-0.5"
+                                        title="Insert to Ex"
+                                    >
+                                        Ex:{fn}
+                                    </button>
+                                ))}
+                             </div>
+                             <div className="flex flex-wrap gap-1">
+                                {['sin(t)', 'cos(t)', 'x', 'y', 't', 'sqrt()', 'abs()'].map(fn => (
+                                    <button 
+                                        key={fn}
+                                        onClick={() => insertText(fn, 'ey')} 
+                                        className="bg-slate-700 hover:bg-slate-600 text-[10px] text-white rounded px-1.5 py-0.5"
+                                        title="Insert to Ey"
+                                    >
+                                        Ey:{fn}
+                                    </button>
+                                ))}
+                             </div>
+                          </div>
+
                           <div>
-                              <label className="block text-[10px] text-pink-400 mb-1 font-mono">Ex(x,y,t) =</label>
+                              <label className="block text-[10px] text-pink-400 mb-1 font-mono">X 分量 (Ex) =</label>
                               <textarea
                                   value={field.equations?.ex || "0"}
                                   onChange={(e) => onUpdateField(field.id, { equations: { ex: e.target.value, ey: field.equations?.ey || "0" } })}
@@ -131,7 +171,7 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
                               />
                           </div>
                           <div>
-                              <label className="block text-[10px] text-pink-400 mb-1 font-mono">Ey(x,y,t) =</label>
+                              <label className="block text-[10px] text-pink-400 mb-1 font-mono">Y 分量 (Ey) =</label>
                               <textarea
                                   value={field.equations?.ey || "0"}
                                   onChange={(e) => onUpdateField(field.id, { equations: { ey: e.target.value, ex: field.equations?.ex || "0" } })}
@@ -148,6 +188,10 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
                               onChange={(e) => onUpdateField(field.id, { strength: parseFloat(e.target.value) })}
                               className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
                           />
+                          <p className="text-[10px] text-slate-500 mt-1">
+                              正数 (+): 垂直向外 (•)<br/>
+                              负数 (-): 垂直向内 (×)
+                          </p>
                       </div>
                   ) : (
                       <div className="grid grid-cols-2 gap-2">

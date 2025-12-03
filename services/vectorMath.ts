@@ -54,9 +54,26 @@ export const Vec2 = {
   distToSegment: (p: Vector2, a: Vector2, b: Vector2): number => {
       const l2 = Vec2.magSq(Vec2.sub(b, a));
       if (l2 === 0) return Vec2.dist(p, a);
-      let t = ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2;
-      t = Math.max(0, Math.min(1, t));
-      const proj = { x: a.x + t * (b.x - a.x), y: a.y + t * (b.y - a.y) };
+      const t = Math.max(0, Math.min(1, Vec2.dot(Vec2.sub(p, a), Vec2.sub(b, a)) / l2));
+      const proj = Vec2.add(a, Vec2.mul(Vec2.sub(b, a), t));
       return Vec2.dist(p, proj);
+  },
+
+  // Returns intersection point of line AB and segment CD, or null
+  getLineSegmentIntersection: (p1: Vector2, p2: Vector2, p3: Vector2, p4: Vector2): Vector2 | null => {
+      const d = (p2.x - p1.x) * (p4.y - p3.y) - (p2.y - p1.y) * (p4.x - p3.x);
+      if (d === 0) return null;
+      const u = ((p3.x - p1.x) * (p4.y - p3.y) - (p3.y - p1.y) * (p4.x - p3.x)) / d;
+      const v = ((p3.x - p1.x) * (p2.y - p1.y) - (p3.y - p1.y) * (p2.x - p1.x)) / d;
+      if (v >= 0 && v <= 1) { // Line p1-p2 is infinite, Segment p3-p4 is finite
+          return { x: p1.x + u * (p2.x - p1.x), y: p1.y + u * (p2.y - p1.y) };
+      }
+      return null;
+  },
+  
+  // Signed area to determine side of line (Cross product of (B-A) and (P-A))
+  // > 0 Left, < 0 Right, 0 On Line
+  crossProductZ: (a: Vector2, b: Vector2, p: Vector2): number => {
+      return (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
   }
 };

@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Play, Pause, RotateCcw, MousePointer2, Circle, Square, Triangle, Camera, Download, Link, Eclipse, MoveRight, Upload, Zap, Activity, Minus, Plus, Scan, Crosshair, Disc, Layers, ChevronDown, ChevronRight, Magnet, Globe } from 'lucide-react';
+import { Play, Pause, RotateCcw, MousePointer2, Circle, Square, Camera, Download, Link, Eclipse, MoveRight, Upload, Zap, Activity, Minus, Plus, Scan, Crosshair, Disc, Layers, ChevronDown, ChevronRight, Magnet, Globe, Split, Merge, Group, Scissors, Triangle } from 'lucide-react';
 import SimulationCanvas, { CanvasRef } from './components/SimulationCanvas';
 import PropertiesPanel from './components/PropertiesPanel';
 import DataCharts from './components/DataCharts';
@@ -23,7 +23,7 @@ const INITIAL_STATE: SimulationState = {
 };
 
 interface ArcBuilder {
-    phase: 0 | 1 | 2; 
+    phase: 1 | 2 | 3; // 1: Center, 2: Start Point, 3: End Point
     center: Vector2;
     radius: number;
     startAngle: number;
@@ -34,13 +34,51 @@ interface RampBuilder {
     isConveyor: boolean;
 }
 
+// UI Helper Components
+
+const CollapsibleGroup = ({ icon, label, children }: { icon: React.ReactNode, label: string, children: React.ReactNode }) => {
+    const [isOpen, setIsOpen] = useState(false);
+    return (
+        <div className="w-full px-1 mb-1">
+            <button 
+                onClick={() => setIsOpen(!isOpen)}
+                className="flex items-center justify-between w-full p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded text-[10px] font-bold uppercase tracking-wider"
+            >
+                <div className="flex items-center gap-1">
+                    {icon}
+                    <span>{label}</span>
+                </div>
+                {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            </button>
+            <div className={`overflow-hidden transition-all duration-300 ${isOpen ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'}`}>
+                <div className="flex flex-col gap-1 p-1 bg-slate-800/30 rounded mt-1">
+                    {children}
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const ToolBtn = ({ mode, setMode, target, icon, label }: { mode: string, setMode: (m: string) => void, target: string, icon: React.ReactNode, label: string }) => (
+    <button 
+        onClick={() => setMode(target)}
+        className={`p-1.5 w-full rounded transition flex flex-col items-center ${mode === target ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
+        title={label}
+    >
+        {icon}
+        <span className="text-[9px] mt-0.5 scale-90">{label}</span>
+    </button>
+);
+
 const App: React.FC = () => {
   const [state, setState] = useState<SimulationState>(INITIAL_STATE);
   const [dragMode, setDragMode] = useState<string>('select');
   const [arcBuilder, setArcBuilder] = useState<ArcBuilder | null>(null);
   const [rampBuilder, setRampBuilder] = useState<RampBuilder | null>(null);
   const [constraintBuilder, setConstraintBuilder] = useState<string | null>(null); // Holds first body ID
+  const [booleanOpBuilder, setBooleanOpBuilder] = useState<{ op: 'combine' | 'cut', subjectId: string } | null>(null);
   const [pinnedBodyId, setPinnedBodyId] = useState<string | null>(null);
+  const [knifeBuilder, setKnifeBuilder] = useState<{ start: Vector2 } | null>(null);
   
   const engineRef = useRef(new PhysicsEngine());
   const canvasRef = useRef<CanvasRef>(null);
@@ -93,28 +131,166 @@ const App: React.FC = () => {
   const handleResetView = () => setState(s => ({ ...s, camera: { x: 0, y: 0, zoom: 1 } }));
   
   const handleSelectBody = (id: string | null) => {
+      // If using knife, don't select
+      if (dragMode === 'tool_knife') {
+          if (!knifeBuilder) {
+              // Mouse down happened in canvas, logic is handled there or here for start?
+              // Actually dragMode is enough state context. Canvas handles interaction.
+          }
+          return;
+      }
+
       if (dragMode === 'tool_traj' && id) {
           setState(s => ({
               ...s,
               bodies: s.bodies.map(b => b.id === id ? { ...b, showTrajectory: !b.showTrajectory } : b)
           }));
-      } else {
-          setState(s => ({ ...s, selectedBodyId: id, selectedFieldId: null, selectedConstraintId: null }));
+          return;
       }
+      
+      // Boolean Operation Logic (Weld/Unweld)
+      if (dragMode === 'tool_combine' || dragMode === 'tool_cut') {
+          if (!id) return;
+          
+          if (!booleanOpBuilder) {
+              setBooleanOpBuilder({ op: dragMode === 'tool_combine' ? 'combine' : 'cut', subjectId: id });
+          } else {
+              // Execute Operation
+              const subjectId = booleanOpBuilder.subjectId;
+              const objectId = id;
+              
+              if (subjectId === objectId) { setBooleanOpBuilder(null); return; }
+
+              if (booleanOpBuilder.op === 'combine') {
+                  // COMBINE: Create Fixed Joint (Weld)
+                  const newConstraint: Constraint = {
+                      id: `weld_${Date.now()}`,
+                      type: ConstraintType.PIN, // Physically behaves as fixed pivot if one point, but essentially links them.
+                      bodyAId: subjectId,
+                      bodyBId: objectId,
+                      localAnchorA: {x:0, y:0}, // Approx center to center linkage
+                      localAnchorB: {x:0, y:0},
+                      length: 0, stiffness: 1, damping: 0
+                  };
+                  setState(s => ({ ...s, constraints: [...s.constraints, newConstraint] }));
+              } else {
+                  // CUT: Delete constraints between A and B
+                  setState(s => ({
+                       ...s,
+                       constraints: s.constraints.filter(c => !((c.bodyAId === subjectId && c.bodyBId === objectId) || (c.bodyAId === objectId && c.bodyBId === subjectId)))
+                  }));
+              }
+              setBooleanOpBuilder(null);
+              setDragMode('select');
+          }
+          return;
+      }
+
+      setState(s => ({ ...s, selectedBodyId: id, selectedFieldId: null, selectedConstraintId: null }));
   };
 
   const handleSelectField = (id: string | null) => {
+      if (dragMode === 'tool_knife') return;
       setState(s => ({ ...s, selectedFieldId: id, selectedBodyId: null, selectedConstraintId: null }));
   };
   
   const handleSelectConstraint = (id: string | null) => {
+      if (dragMode === 'tool_knife') return;
       setState(s => ({ ...s, selectedConstraintId: id, selectedBodyId: null, selectedFieldId: null }));
+  };
+
+  const handleKnifeCut = (start: Vector2, end: Vector2) => {
+      setKnifeBuilder(null);
+      
+      // Simple logic: If line cuts a Polygon or Box, split it.
+      // Box is converted to Polygon.
+      const newBodies: PhysicsBody[] = [];
+      const idsToRemove: string[] = [];
+
+      state.bodies.forEach(body => {
+          if (body.type === BodyType.CIRCLE || body.type === BodyType.ARC || body.isParticle || body.type === BodyType.PLANE) return;
+
+          let vertices = body.vertices;
+          if (body.type === BodyType.BOX) {
+               const w = (body.width || 40) / 2;
+               const h = (body.height || 40) / 2;
+               // Local
+               vertices = [ { x: -w, y: -h }, { x: w, y: -h }, { x: w, y: h }, { x: -w, y: h } ];
+          }
+          
+          if (!vertices) return;
+
+          // Convert to World for intersection
+          const worldVerts = vertices.map(v => Vec2.transform(v, body.position, body.angle));
+
+          const leftVerts: Vector2[] = [];
+          const rightVerts: Vector2[] = [];
+
+          for (let i = 0; i < worldVerts.length; i++) {
+              const v1 = worldVerts[i];
+              const v2 = worldVerts[(i + 1) % worldVerts.length];
+
+              const side1 = Vec2.crossProductZ(start, end, v1);
+              if (side1 >= 0) leftVerts.push(v1);
+              else rightVerts.push(v1);
+
+              // Check Intersection
+              const intersect = Vec2.getLineSegmentIntersection(start, end, v1, v2);
+              if (intersect) {
+                  leftVerts.push(intersect);
+                  rightVerts.push(intersect);
+              }
+          }
+
+          if (leftVerts.length >= 3 && rightVerts.length >= 3) {
+               idsToRemove.push(body.id);
+               
+               // Center Centroid Helper
+               const getCentroid = (vs: Vector2[]) => {
+                   let x=0, y=0; vs.forEach(v => {x+=v.x; y+=v.y}); return {x: x/vs.length, y: y/vs.length};
+               };
+               
+               const cLeft = getCentroid(leftVerts);
+               const cRight = getCentroid(rightVerts);
+               
+               // Convert back to local for new bodies
+               const toLocal = (vs: Vector2[], center: Vector2) => vs.map(v => Vec2.sub(v, center));
+
+               newBodies.push({
+                   ...body,
+                   id: body.id + '_L',
+                   type: BodyType.POLYGON,
+                   position: cLeft,
+                   angle: 0, // Reset angle as vertices are now world-aligned then re-localized
+                   vertices: toLocal(leftVerts, cLeft),
+                   mass: body.mass / 2, // Approx
+                   inverseMass: body.mass === 0 ? 0 : 1/(body.mass/2)
+               });
+               newBodies.push({
+                   ...body,
+                   id: body.id + '_R',
+                   type: BodyType.POLYGON,
+                   position: cRight,
+                   angle: 0,
+                   vertices: toLocal(rightVerts, cRight),
+                   mass: body.mass / 2,
+                   inverseMass: body.mass === 0 ? 0 : 1/(body.mass/2)
+               });
+          }
+      });
+
+      if (idsToRemove.length > 0) {
+          setState(s => ({
+              ...s,
+              bodies: [...s.bodies.filter(b => !idsToRemove.includes(b.id)), ...newBodies]
+          }));
+      }
   };
 
   const handleZoom = (deltaY: number, mouseX: number, mouseY: number) => {
       setState(s => {
           const scale = deltaY > 0 ? 0.9 : 1.1;
-          const newZoom = Math.max(0.01, Math.min(20, s.camera.zoom * scale)); // Wider zoom range
+          const newZoom = Math.max(0.01, Math.min(20, s.camera.zoom * scale)); 
           
           const worldMouseX = (mouseX - s.camera.x) / s.camera.zoom;
           const worldMouseY = (mouseY - s.camera.y) / s.camera.zoom;
@@ -184,13 +360,13 @@ const App: React.FC = () => {
           radius: vertices && vertices.length === 1 ? vertices[0].x : 100, // Vertices[0].x carries radius for circle
           vertices: shape === FieldShape.POLYGON ? vertices : undefined,
           strength: { x: 10, y: 0 },
-          equations: { ex: "Math.sin(x/50) * 50", ey: "0" }, // Default equations
+          equations: { ex: "Math.sin(x/50) * 50", ey: "0" }, 
           visible: true
       };
 
       setState(s => ({
           ...s,
-          fields: [newField, ...s.fields], // Add to front (bottom layer conceptually, though render order handles it)
+          fields: [newField, ...s.fields], 
           selectedFieldId: newField.id,
           selectedBodyId: null,
           selectedConstraintId: null
@@ -199,13 +375,18 @@ const App: React.FC = () => {
   };
 
   const handleAddBody = (pos: Vector2) => {
+    if (dragMode === 'tool_knife') {
+        if (!knifeBuilder) setKnifeBuilder({ start: pos });
+        return;
+    }
+
     // Ramp/Conveyor
     if (dragMode === 'add_ramp' || dragMode === 'add_conveyor') {
         if (!rampBuilder) {
             setRampBuilder({ start: pos, isConveyor: dragMode === 'add_conveyor' });
         } else {
             const start = rampBuilder.start;
-            const end = pos; // Note: This pos is already snapped by SimulationCanvas now
+            const end = pos; 
             const center = Vec2.mul(Vec2.add(start, end), 0.5);
             const delta = Vec2.sub(end, start);
             const length = Vec2.mag(delta);
@@ -237,26 +418,34 @@ const App: React.FC = () => {
         return;
     }
 
-    // Arc
+    // Arc - Updated 3 Click Logic
     if (dragMode === 'add_arc') {
         if (!arcBuilder) {
+            // Phase 1: Click Center
             setArcBuilder({ phase: 1, center: pos, radius: 0, startAngle: 0 });
         } else if (arcBuilder.phase === 1) {
-            // Phase 1 -> 2: Define Radius. Start Angle Defaults to 0 (Right).
+            // Phase 2: Click Start Point (defines Radius + Start Angle)
             const r = Vec2.dist(arcBuilder.center, pos);
-            setArcBuilder({ ...arcBuilder, phase: 2, radius: r, startAngle: 0 });
-        } else if (arcBuilder.phase === 2) {
-            // Phase 2 -> 3: Define End Angle based on mouse position
             const angle = Math.atan2(pos.y - arcBuilder.center.y, pos.x - arcBuilder.center.x);
+            setArcBuilder({ ...arcBuilder, phase: 2, radius: r, startAngle: angle });
+        } else if (arcBuilder.phase === 2) {
+            // Phase 3: Click End Angle
+            let endAngle = Math.atan2(pos.y - arcBuilder.center.y, pos.x - arcBuilder.center.x);
+            const startPoint = { x: arcBuilder.center.x + Math.cos(arcBuilder.startAngle)*arcBuilder.radius, y: arcBuilder.center.y + Math.sin(arcBuilder.startAngle)*arcBuilder.radius };
             
-            // Normalize angles for logic
-            let start = arcBuilder.startAngle; // 0
-            let end = angle;
-            
-            // Ensure end > start for simplicity or handle wrap logic
-            // Math.atan2 returns -PI to PI.
-            // If user clicks above, end is neg.
-            if (end < start) end += 2 * Math.PI;
+            // Check if user clicked near the start point to close the circle
+            let start = arcBuilder.startAngle;
+            let end = endAngle;
+
+            if (Vec2.dist(pos, startPoint) < 20) {
+                 // Close the loop
+                 start = 0;
+                 end = 2 * Math.PI;
+            } else {
+                 // Ensure we go clockwise/counter-clockwise correctly or just normalize?
+                 // Let's standardise
+                 // if (end < start) end += 2 * Math.PI;
+            }
 
             const newBody: PhysicsBody = {
                 id: `arc_${Date.now()}`,
@@ -280,51 +469,6 @@ const App: React.FC = () => {
     }
 
     if (dragMode === 'add_spring' || dragMode === 'add_rod' || dragMode === 'add_pin') {
-        // Find body under mouse (copied logic from SimulationCanvas hit test basically)
-        const clickedBody = state.bodies.slice().reverse().find(b => {
-             if (b.type === BodyType.CIRCLE) {
-                 const hitR = b.isParticle ? 10 : (b.radius || 20);
-                 return Vec2.dist(pos, b.position) < hitR;
-             }
-             if (b.type === BodyType.BOX) {
-                 // Simple AABB for connecting is okay, or improved OBB check
-                 // Let's use simple distance for center-based connection or AABB
-                 const w = b.width || 40; const h = b.height || 40;
-                 return pos.x > b.position.x - w/2 && pos.x < b.position.x + w/2 && pos.y > b.position.y - h/2 && pos.y < b.position.y + h/2;
-             }
-             return false;
-        });
-
-        if (clickedBody) {
-             if (!constraintBuilder) {
-                 setConstraintBuilder(clickedBody.id);
-             } else {
-                 if (constraintBuilder !== clickedBody.id) {
-                     const type = dragMode === 'add_spring' ? ConstraintType.SPRING : 
-                                  dragMode === 'add_rod' ? ConstraintType.ROD : ConstraintType.PIN;
-                     
-                     const bodyA = state.bodies.find(b => b.id === constraintBuilder)!;
-                     const bodyB = clickedBody;
-                     
-                     const dist = Vec2.dist(bodyA.position, bodyB.position);
-
-                     const newConstraint = {
-                         id: `c_${Date.now()}`,
-                         type: type,
-                         bodyAId: bodyA.id,
-                         bodyBId: bodyB.id,
-                         localAnchorA: {x:0, y:0},
-                         localAnchorB: {x:0, y:0},
-                         length: dist, 
-                         stiffness: 0.8,
-                         damping: 0.05
-                     };
-                     setState(s => ({ ...s, constraints: [...s.constraints, newConstraint] }));
-                 }
-                 setConstraintBuilder(null);
-                 setDragMode('select');
-             }
-        }
         return;
     }
 
@@ -348,23 +492,13 @@ const App: React.FC = () => {
         newBody.width = 40;
         newBody.height = 40;
         newBody.color = '#3b82f6';
-    } else if (dragMode === 'add_triangle') {
-        newBody.type = BodyType.POLYGON;
-        newBody.color = '#10b981';
-        const size = 30;
-        newBody.vertices = [
-            { x: 0, y: -size },
-            { x: size * Math.cos(Math.PI/6), y: size * Math.sin(Math.PI/6) },
-            { x: -size * Math.cos(Math.PI/6), y: size * Math.sin(Math.PI/6) }
-        ];
     } else if (dragMode === 'add_particle') {
         newBody.isParticle = true;
-        newBody.radius = 5; // Very small for physics
+        newBody.radius = 5; 
         newBody.mass = 1;
         newBody.inverseMass = 1;
         newBody.color = '#facc15';
     } else {
-        // Standard Ball
         newBody.radius = 20;
     }
     
@@ -460,162 +594,179 @@ const App: React.FC = () => {
           bodies: s.bodies.map(b => {
               if (b.inverseMass === 0) return b; 
               if (type === 'smooth') return { ...b, friction: 0 };
-              if (type === 'elastic') return { ...b, restitution: 1.0, friction: 0 }; 
+              if (type === 'elastic') return { ...b, restitution: 1.0 };
               return b;
           })
       }));
   };
 
-  const setClear = () => { setDragMode('select'); setArcBuilder(null); setRampBuilder(null); setConstraintBuilder(null); };
+  const clearAll = () => {
+      if (confirm("确定要清空所有对象吗?")) {
+          setState({ ...INITIAL_STATE, camera: state.camera });
+          setPinnedBodyId(null);
+      }
+  };
 
-  const handleTogglePin = (id: string | null) => {
-      setPinnedBodyId(id);
+  const formatTime = (t: number) => {
+      const min = Math.floor(t / 60);
+      const sec = Math.floor(t % 60);
+      const ms = Math.floor((t * 100) % 100);
+      return `${min.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}:${ms.toString().padStart(2, '0')}`;
   };
 
   return (
-    <div className="flex h-screen w-screen bg-slate-950 overflow-hidden font-sans text-slate-200">
-      <input 
-        type="file" 
-        ref={fileInputRef} 
-        style={{display: 'none'}} 
-        onChange={handleImportScene} 
-        accept=".json"
-      />
-
-      {/* LEFT: Toolbar */}
-      <div className="w-16 bg-slate-900 border-r border-slate-800 flex flex-col items-center py-4 gap-2 z-10 shadow-xl overflow-y-auto custom-scrollbar shrink-0">
-        <div className="mb-2 shrink-0">
-             <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center font-bold text-white text-sm shadow-lg shadow-blue-900/20">Ph</div>
-        </div>
-
-        <div className="w-full flex flex-col items-center gap-1">
-             <ToolBtn icon={<MousePointer2 size={18} />} active={dragMode === 'select'} onClick={setClear} tooltip="选择/移动 (Select/Move)" />
-             <ToolBtn icon={<Crosshair size={18} />} active={dragMode === 'select_nodrag'} onClick={() => setDragMode('select_nodrag')} tooltip="仅选择 (Select Only)" />
+    <div className="w-full h-screen flex flex-col bg-slate-950 text-slate-200 overflow-hidden font-sans">
+      {/* Header */}
+      <header className="h-12 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-4 z-20">
+        <div className="flex items-center space-x-2">
+            <Activity className="text-blue-500" />
+            <h1 className="font-bold text-lg tracking-tight bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">PhysLab Pro</h1>
         </div>
         
-        <div className="w-8 h-px bg-slate-800 my-1 shrink-0"></div>
-
-        {/* Collapsible Groups */}
-        <ToolGroup title="物体" defaultExpanded={false}>
-             <ToolBtn icon={<Circle size={18} />} active={dragMode === 'add_ball'} onClick={() => setDragMode('add_ball')} tooltip="小球 (Ball)" />
-             <ToolBtn icon={<Disc size={18} />} active={dragMode === 'add_particle'} onClick={() => setDragMode('add_particle')} tooltip="质点 (Particle)" />
-             <ToolBtn icon={<Square size={18} />} active={dragMode === 'add_box'} onClick={() => setDragMode('add_box')} tooltip="方块 (Block)" />
-             <ToolBtn icon={<Triangle size={18} />} active={dragMode === 'add_triangle'} onClick={() => setDragMode('add_triangle')} tooltip="多边形 (Poly)" />
-             <ToolBtn icon={<Layers size={18} />} active={dragMode === 'add_ramp'} onClick={() => setDragMode('add_ramp')} tooltip="斜面/地面 (Ramp/Plane)" />
-             <ToolBtn icon={<Eclipse size={18} />} active={dragMode === 'add_arc'} onClick={() => setDragMode('add_arc')} tooltip="轨道 (Track)" />
-             <ToolBtn icon={<MoveRight size={18} />} active={dragMode === 'add_conveyor'} onClick={() => setDragMode('add_conveyor')} tooltip="传送带 (Conveyor)" />
-        </ToolGroup>
-
-        <ToolGroup title="约束" defaultExpanded={false}>
-             <ToolBtn icon={<Activity size={18} />} active={dragMode === 'add_spring'} onClick={() => setDragMode('add_spring')} tooltip="弹簧 (Spring)" />
-             <ToolBtn icon={<Link size={18} />} active={dragMode === 'add_rod'} onClick={() => setDragMode('add_rod')} tooltip="杆 (Rod)" />
-             <ToolBtn icon={<Zap size={18} />} active={dragMode === 'add_pin'} onClick={() => setDragMode('add_pin')} tooltip="铰链 (Pin)" />
-        </ToolGroup>
-        
-        <ToolGroup title="场" defaultExpanded={false}>
-             <ToolBtn icon={<Square size={18} />} active={dragMode === 'add_field_box'} onClick={() => setDragMode('add_field_box')} tooltip="矩形场 (Box Field)" />
-             <ToolBtn icon={<Circle size={18} />} active={dragMode === 'add_field_circle'} onClick={() => setDragMode('add_field_circle')} tooltip="圆形场 (Circle Field)" />
-             <ToolBtn icon={<Triangle size={18} />} active={dragMode === 'add_field_poly'} onClick={() => setDragMode('add_field_poly')} tooltip="多边形场 (Poly Field)" />
-        </ToolGroup>
-
-        <ToolGroup title="工具" defaultExpanded={false}>
-             <ToolBtn icon={<Globe size={18} />} active={dragMode === 'tool_traj'} onClick={() => setDragMode('tool_traj')} tooltip="轨迹开关 (Trail Toggle)" />
-             <ToolBtn icon={<Scan size={18} />} active={dragMode === 'tool_velocity'} onClick={() => setDragMode('tool_velocity')} tooltip="设置初速度 (Velocity)" />
-             <ToolBtn icon={<Magnet size={18} />} active={dragMode === 'tool_force'} onClick={() => setDragMode('tool_force')} tooltip="设置恒力 (Force)" />
-        </ToolGroup>
-
-      </div>
-
-      {/* CENTER: Canvas */}
-      <div className="flex-1 flex flex-col relative min-w-0">
-        <div className="h-14 bg-slate-900 border-b border-slate-800 flex items-center px-4 justify-between z-10 shadow-sm gap-4 overflow-x-auto">
-            {/* Play Controls */}
-            <div className="flex items-center space-x-2 shrink-0">
-                <button 
+        <div className="flex items-center space-x-4">
+             <div className="flex items-center bg-slate-800 rounded-lg p-1 space-x-1">
+                 <button 
                     onClick={handleTogglePause}
-                    className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium text-sm transition shadow-lg ${state.paused ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-900/20' : 'bg-amber-600 hover:bg-amber-500 text-white shadow-amber-900/20'}`}
-                >
-                    {state.paused ? <Play size={16} fill="currentColor" /> : <Pause size={16} fill="currentColor" />}
-                    <span className="hidden sm:inline">{state.paused ? "运行" : "暂停"}</span>
-                </button>
-                <button 
+                    className={`p-1.5 rounded-md transition ${state.paused ? 'bg-green-600 hover:bg-green-500 text-white' : 'hover:bg-slate-700 text-slate-300'}`}
+                    title={state.paused ? "Play" : "Pause"}
+                 >
+                     {state.paused ? <Play size={18} fill="currentColor" /> : <Pause size={18} fill="currentColor" />}
+                 </button>
+                 <button 
                     onClick={handleReset}
-                    className="flex items-center space-x-2 px-3 py-1.5 rounded-md hover:bg-slate-800 text-slate-400 hover:text-white transition text-sm"
-                    title="重置场景"
-                >
-                    <RotateCcw size={16} />
-                </button>
-            </div>
-
-            {/* View Controls (Zoom/Reset) */}
-             <div className="flex items-center space-x-2 bg-slate-800/30 px-2 py-1 rounded border border-slate-800 shrink-0">
-                <button 
-                    onClick={() => setZoom(state.camera.zoom - 0.2)}
-                    className="p-1 hover:bg-slate-700 rounded text-slate-400 hover:text-white"
-                >
-                    <Minus size={14} />
-                </button>
-                <input 
-                    type="range" min="0.1" max="5" step="0.1"
-                    value={state.camera.zoom}
-                    onChange={(e) => setZoom(parseFloat(e.target.value))}
-                    className="w-16 sm:w-24 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer"
-                />
-                <button 
-                    onClick={() => setZoom(state.camera.zoom + 0.2)}
-                    className="p-1 hover:bg-slate-700 rounded text-slate-400 hover:text-white"
-                >
-                    <Plus size={14} />
-                </button>
-                <div className="w-px h-4 bg-slate-700 mx-1"></div>
-                <button 
-                    onClick={handleResetView}
-                    className="p-1 hover:bg-slate-700 rounded text-slate-400 hover:text-white"
-                    title="重置视图"
-                >
-                    <Scan size={14} />
-                </button>
-            </div>
-
-            {/* Presets & Gravity */}
-            <div className="hidden md:flex items-center space-x-4 bg-slate-800/30 px-3 py-1 rounded border border-slate-800 shrink-0">
-                <div className="flex items-center space-x-2 border-r border-slate-700 pr-3">
-                    <span className="text-[10px] text-slate-500 uppercase tracking-wider">重力 g</span>
-                    <input 
-                        type="range" min="0" max="30" step="1" 
-                        value={state.gravity.y}
-                        onChange={(e) => setState(s => ({...s, gravity: {x:0, y: Number(e.target.value)}}))}
-                        className="w-16 lg:w-20 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer"
-                    />
-                    <span className="text-xs font-mono w-8 text-right">{state.gravity.y}</span>
-                </div>
-                
-                <button onClick={() => setPreset('smooth')} className="text-xs flex items-center space-x-1 text-slate-400 hover:text-blue-400 transition" title="Friction = 0">
-                    <Activity size={14} /> <span>光滑</span>
-                </button>
-                <button onClick={() => setPreset('elastic')} className="text-xs flex items-center space-x-1 text-slate-400 hover:text-purple-400 transition" title="Restitution = 1">
-                    <Zap size={14} /> <span>弹性</span>
-                </button>
-            </div>
-
-            {/* File Operations */}
-            <div className="flex space-x-1 sm:space-x-2 shrink-0">
-                 <button onClick={() => canvasRef.current?.exportImage()} className="p-2 text-slate-400 hover:text-white transition" title="截图">
-                    <Camera size={18} />
+                    className="p-1.5 rounded-md hover:bg-slate-700 text-slate-300 transition"
+                    title="Reset Simulation"
+                 >
+                     <RotateCcw size={18} />
                  </button>
-                 <button onClick={handleSaveScene} className="p-2 text-slate-400 hover:text-white transition" title="保存">
-                    <Download size={18} />
-                 </button>
-                 <button onClick={() => fileInputRef.current?.click()} className="p-2 text-slate-400 hover:text-white transition" title="导入">
-                    <Upload size={18} />
-                 </button>
-            </div>
+             </div>
+             
+             <div className="h-6 w-px bg-slate-700 mx-2" />
+
+             <div className="flex space-x-2 text-xs">
+                 <button onClick={() => setPreset('smooth')} className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded transition">光滑模式</button>
+                 <button onClick={() => setPreset('elastic')} className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded transition">完全弹性</button>
+                 <button onClick={clearAll} className="px-3 py-1.5 bg-red-900/30 hover:bg-red-900/50 text-red-300 rounded transition">清空</button>
+             </div>
         </div>
 
-        <div className="flex-1 relative bg-slate-950 overflow-hidden">
+        <div className="flex items-center space-x-3">
+             <button onClick={() => canvasRef.current?.exportImage()} className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white" title="Export Image">
+                 <Camera size={18} />
+             </button>
+             <button onClick={handleSaveScene} className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white" title="Save Scene">
+                 <Download size={18} />
+             </button>
+             <label className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white cursor-pointer" title="Load Scene">
+                 <Upload size={18} />
+                 <input type="file" ref={fileInputRef} onChange={handleImportScene} className="hidden" accept=".json" />
+             </label>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <div className="flex-1 flex overflow-hidden relative">
+          
+          {/* Left Toolbar */}
+          <aside className="w-16 bg-slate-900 border-r border-slate-800 flex flex-col py-2 overflow-y-auto no-scrollbar select-none z-10">
+              
+              <div className="flex flex-col items-center gap-1 mb-2">
+                 <button 
+                      onClick={() => setDragMode('select')}
+                      className={`p-2 rounded-lg transition ${dragMode === 'select' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
+                      title="选择 (Select)"
+                  >
+                      <MousePointer2 size={20} />
+                      <span className="text-[9px] block text-center mt-0.5">选择</span>
+                  </button>
+              </div>
+
+              {/* Group: Shapes */}
+              <CollapsibleGroup icon={<Square size={16} />} label="形状">
+                  <ToolBtn mode={dragMode} setMode={setDragMode} target="add_circle" icon={<Circle size={18} />} label="圆形" />
+                  <ToolBtn mode={dragMode} setMode={setDragMode} target="add_box" icon={<Square size={18} />} label="矩形" />
+                  <ToolBtn mode={dragMode} setMode={setDragMode} target="add_particle" icon={<Disc size={18} />} label="质点" />
+                  <button 
+                      onClick={() => { setDragMode('add_arc'); setArcBuilder(null); }}
+                      className={`p-1.5 w-full rounded transition flex flex-col items-center ${dragMode === 'add_arc' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
+                      title="弧形轨道"
+                  >
+                      <Eclipse size={18} />
+                      <span className="text-[9px] mt-0.5 scale-90">轨道</span>
+                  </button>
+              </CollapsibleGroup>
+
+              {/* Group: Environment */}
+              <CollapsibleGroup icon={<Triangle size={16} />} label="环境">
+                   <button 
+                      onClick={() => { setDragMode('add_ramp'); setRampBuilder(null); }}
+                      className={`p-1.5 w-full rounded transition flex flex-col items-center ${dragMode === 'add_ramp' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
+                      title="斜面"
+                  >
+                      <Triangle size={18} className="rotate-90" />
+                      <span className="text-[9px] mt-0.5 scale-90">斜面</span>
+                  </button>
+                  <button 
+                      onClick={() => { setDragMode('add_conveyor'); setRampBuilder(null); }}
+                      className={`p-1.5 w-full rounded transition flex flex-col items-center ${dragMode === 'add_conveyor' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
+                      title="传送带"
+                  >
+                      <MoveRight size={18} />
+                      <span className="text-[9px] mt-0.5 scale-90">传送带</span>
+                  </button>
+              </CollapsibleGroup>
+
+              {/* Group: Linkage */}
+              <CollapsibleGroup icon={<Link size={16} />} label="连接">
+                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_spring" icon={<Activity size={18} />} label="弹簧" />
+                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_rod" icon={<Link size={18} />} label="刚性杆" />
+                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_pin" icon={<Crosshair size={18} />} label="销钉" />
+              </CollapsibleGroup>
+
+              {/* Group: Fields */}
+              <CollapsibleGroup icon={<Zap size={16} />} label="场">
+                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_field_box" icon={<Scan size={18} />} label="矩形场" />
+                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_field_circle" icon={<Globe size={18} />} label="圆形场" />
+                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_field_poly" icon={<Layers size={18} />} label="多边形" />
+              </CollapsibleGroup>
+
+              {/* Group: Tools */}
+              <CollapsibleGroup icon={<Scissors size={16} />} label="工具">
+                   <button 
+                      onClick={() => { setDragMode('tool_combine'); setBooleanOpBuilder(null); }}
+                      className={`p-1.5 w-full rounded transition flex flex-col items-center ${dragMode === 'tool_combine' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
+                      title="焊接 (Combine)"
+                   >
+                      <Group size={18} />
+                      <span className="text-[9px] mt-0.5 scale-90">焊接</span>
+                   </button>
+                   <button 
+                      onClick={() => { setDragMode('tool_cut'); setBooleanOpBuilder(null); }}
+                      className={`p-1.5 w-full rounded transition flex flex-col items-center ${dragMode === 'tool_cut' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
+                      title="断开 (Unlink)"
+                   >
+                      <Split size={18} />
+                      <span className="text-[9px] mt-0.5 scale-90">断开</span>
+                   </button>
+                   <button 
+                      onClick={() => { setDragMode('tool_knife'); setKnifeBuilder(null); }}
+                      className={`p-1.5 w-full rounded transition flex flex-col items-center ${dragMode === 'tool_knife' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
+                      title="切割 (Knife)"
+                   >
+                      <Scissors size={18} />
+                      <span className="text-[9px] mt-0.5 scale-90">切割</span>
+                   </button>
+                   <ToolBtn mode={dragMode} setMode={setDragMode} target="tool_velocity" icon={<MoveRight size={18} className="-rotate-45" />} label="速度" />
+                   <ToolBtn mode={dragMode} setMode={setDragMode} target="tool_force" icon={<Zap size={18} />} label="恒力" />
+              </CollapsibleGroup>
+
+          </aside>
+
+          {/* Canvas Area */}
+          <main className="flex-1 relative bg-slate-950">
              <SimulationCanvas 
                 ref={canvasRef}
-                state={state} 
+                state={state}
                 onSelectBody={handleSelectBody}
                 onSelectField={handleSelectField}
                 onSelectConstraint={handleSelectConstraint}
@@ -626,107 +777,103 @@ const App: React.FC = () => {
                 dragMode={dragMode}
                 onZoom={handleZoom}
                 onPauseToggle={(p) => setState(s => ({...s, paused: p}))}
-                arcCreation={arcBuilder ? { 
-                    phase: arcBuilder.phase, 
-                    center: arcBuilder.center, 
-                    radius: arcBuilder.radius, 
-                    endAngle: 0 
-                } : null}
-                rampCreation={rampBuilder ? { start: rampBuilder.start } : null}
+                arcCreation={arcBuilder ? { ...arcBuilder, endAngle: 0 } : null}
+                rampCreation={rampBuilder}
                 constraintBuilder={constraintBuilder}
+                booleanOpBuilder={booleanOpBuilder}
+                knifeBuilder={knifeBuilder}
+                onKnifeCut={handleKnifeCut}
              />
              
+             {/* Overlay Info */}
+             <div className="absolute top-4 right-4 bg-slate-900/80 backdrop-blur border border-slate-700 p-3 rounded-lg text-xs text-slate-300 pointer-events-none select-none shadow-xl flex flex-col gap-1 z-0">
+                 <div className="flex justify-between w-40">
+                     <span className="text-slate-500">缩放:</span>
+                     <span className="font-mono">{(state.camera.zoom * 100).toFixed(0)}%</span>
+                 </div>
+                 <div className="flex justify-between">
+                     <span className="text-slate-500">时间:</span>
+                     <span className="font-mono text-emerald-400">{formatTime(state.time)}</span>
+                 </div>
+                 <div className="flex justify-between">
+                     <span className="text-slate-500">对象:</span>
+                     <span className="font-mono">{state.bodies.length}</span>
+                 </div>
+                 
+                 {/* Hints */}
+                 {booleanOpBuilder && <p className="text-amber-400 font-bold mt-1 border-t border-slate-700 pt-1">选择第二个对象以焊接...</p>}
+                 {knifeBuilder && <p className="text-red-400 font-bold mt-1 border-t border-slate-700 pt-1">拖动以切割...</p>}
+                 {arcBuilder && (
+                     <p className="text-blue-400 font-bold mt-1 border-t border-slate-700 pt-1">
+                         {arcBuilder.phase === 1 ? '步骤 1: 点击圆心' : arcBuilder.phase === 2 ? '步骤 2: 点击起点' : '步骤 3: 点击终点'}
+                     </p>
+                 )}
+             </div>
+
+             {/* Floating Chart (Pinned) */}
              {pinnedBodyId && (
-                 <div className="absolute top-4 right-4 w-80 md:w-96 bg-slate-900/90 border border-slate-700 rounded-xl shadow-2xl backdrop-blur-sm z-20 overflow-hidden flex flex-col p-3 ring-1 ring-slate-700">
-                    <div className="flex justify-between items-center mb-2">
-                        <span className="text-xs font-bold text-slate-300 uppercase tracking-wider">固定视图 (Pinned)</span>
-                    </div>
-                    <DataCharts 
-                        selectedBodyId={pinnedBodyId} 
-                        state={state} 
-                        isPinned={true}
-                        onTogglePin={handleTogglePin}
-                    />
+                 <div className="absolute top-24 right-4 w-80 h-48 bg-slate-900/95 backdrop-blur border border-slate-600 rounded-lg shadow-2xl z-10 flex flex-col">
+                      <div className="h-6 px-2 bg-slate-800 rounded-t-lg flex items-center justify-between">
+                          <span className="text-[10px] text-slate-400 uppercase">实时图表 (Pinned)</span>
+                      </div>
+                      <div className="flex-1 p-1">
+                          <DataCharts 
+                              selectedBodyId={pinnedBodyId}
+                              state={state}
+                              isPinned={true}
+                              onTogglePin={() => setPinnedBodyId(null)}
+                          />
+                      </div>
                  </div>
              )}
-
-             <div className="absolute top-4 left-4 pointer-events-none flex flex-col items-start space-y-2">
-                 {dragMode === 'select_nodrag' && <div className="hud-badge bg-slate-600">选择模式 (不移动)</div>}
-                 {dragMode === 'tool_traj' && <div className="hud-badge bg-blue-600">点击物体切换轨迹显示</div>}
-                 {dragMode === 'tool_velocity' && <div className="hud-badge bg-blue-600">点击物体 -> 拖拽设置初速度</div>}
-                 {dragMode === 'tool_force' && <div className="hud-badge bg-red-600">点击物体 -> 拖拽设置恒力</div>}
-                 {dragMode.startsWith('add_field_') && <div className="hud-badge bg-emerald-600">拖拽绘制场区域</div>}
-                 
-                 {constraintBuilder && (
-                     <div className="hud-badge bg-amber-600 animate-pulse">
-                         点击第二个物体进行连接
-                     </div>
-                 )}
-                 <div className="text-[10px] text-slate-600 font-mono">
-                     Zoom: {(state.camera.zoom * 100).toFixed(0)}%
-                 </div>
+             
+             {/* Zoom Controls */}
+             <div className="absolute bottom-4 left-4 flex flex-col space-y-1 z-10">
+                 <button onClick={() => setZoom(state.camera.zoom * 1.2)} className="p-2 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 shadow-lg"><Plus size={16} /></button>
+                 <button onClick={() => setZoom(state.camera.zoom / 1.2)} className="p-2 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 shadow-lg"><Minus size={16} /></button>
+                 <button onClick={handleResetView} className="p-2 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 shadow-lg"><Scan size={16} /></button>
              </div>
-        </div>
-      </div>
+          </main>
 
-      {/* RIGHT: Properties */}
-      <div className="w-72 lg:w-80 bg-slate-900 border-l border-slate-800 flex flex-col z-10 shadow-2xl shrink-0">
-        <div className="flex-1 overflow-y-auto custom-scrollbar">
-            <PropertiesPanel 
-                body={state.bodies.find(b => b.id === state.selectedBodyId) || null} 
-                field={state.fields.find(f => f.id === state.selectedFieldId) || null}
-                constraint={state.constraints.find(c => c.id === state.selectedConstraintId) || null}
-                onUpdateBody={handleUpdateBody}
-                onUpdateField={handleUpdateField}
-                onUpdateConstraint={handleUpdateConstraint}
-                onDeleteBody={handleDeleteBody}
-                onDeleteField={handleDeleteField}
-                onDeleteConstraint={handleDeleteConstraint}
-            />
-        </div>
-        <div className="border-t border-slate-800 bg-slate-900 p-4 shrink-0">
-            <DataCharts 
-                selectedBodyId={state.selectedBodyId} 
-                state={state} 
-                isPinned={false}
-                onTogglePin={handleTogglePin}
-            />
-        </div>
+          {/* Right Panel */}
+          <aside className="w-80 bg-slate-900 border-l border-slate-800 flex flex-col z-10">
+              {/* Top: Properties */}
+              <div className="flex-1 overflow-y-auto no-scrollbar border-b border-slate-800">
+                  <PropertiesPanel 
+                      body={state.selectedBodyId ? state.bodies.find(b => b.id === state.selectedBodyId) || null : null}
+                      field={state.selectedFieldId ? state.fields.find(f => f.id === state.selectedFieldId) || null : null}
+                      constraint={state.selectedConstraintId ? state.constraints.find(c => c.id === state.selectedConstraintId) || null : null}
+                      onUpdateBody={handleUpdateBody}
+                      onUpdateField={handleUpdateField}
+                      onUpdateConstraint={handleUpdateConstraint}
+                      onDeleteBody={handleDeleteBody}
+                      onDeleteField={handleDeleteField}
+                      onDeleteConstraint={handleDeleteConstraint}
+                  />
+              </div>
+              
+              {/* Bottom: Graphs (Only show if not pinned or if pinned ID is different from selected) */}
+              <div className="h-64 bg-slate-900 flex flex-col p-2 transition-all">
+                  <div className="flex items-center justify-between mb-2 px-1">
+                      <span className="text-xs font-semibold text-slate-500 uppercase">实时数据 (Data)</span>
+                      <Activity size={14} className="text-slate-600" />
+                  </div>
+                  <div className="flex-1 bg-slate-950 rounded border border-slate-800 relative overflow-hidden">
+                      {/* If Pinned ID matches Selected ID, the floating chart handles it. 
+                          However, typical UX is sidebar always shows Selected, Pinned shows Pinned. 
+                      */}
+                      <DataCharts 
+                          selectedBodyId={state.selectedBodyId} 
+                          state={state} 
+                          isPinned={pinnedBodyId === state.selectedBodyId}
+                          onTogglePin={(id) => setPinnedBodyId(id)}
+                      />
+                  </div>
+              </div>
+          </aside>
       </div>
     </div>
   );
 };
-
-const ToolGroup: React.FC<{title: string, children: React.ReactNode, defaultExpanded: boolean}> = ({ title, children, defaultExpanded }) => {
-    const [expanded, setExpanded] = useState(defaultExpanded);
-    return (
-        <div className="w-full flex flex-col items-center gap-1">
-            <button 
-                onClick={() => setExpanded(!expanded)} 
-                className="w-full flex items-center justify-center py-1 hover:bg-slate-800 rounded transition"
-            >
-                {expanded ? <ChevronDown size={12} className="text-slate-500" /> : <ChevronRight size={12} className="text-slate-500" />}
-            </button>
-            {expanded && (
-                <div className="flex flex-col items-center gap-1 animate-in slide-in-from-top-2 duration-200">
-                    {children}
-                </div>
-            )}
-        </div>
-    );
-};
-
-const ToolBtn: React.FC<{icon: React.ReactNode, active: boolean, onClick: () => void, tooltip: string, className?: string}> = ({ icon, active, onClick, tooltip, className }) => (
-    <button 
-        onClick={onClick}
-        title={tooltip}
-        className={`p-2 rounded-lg transition-all duration-200 group relative shrink-0 ${active ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'} ${className}`}
-    >
-        {icon}
-        <span className="absolute left-14 top-1.5 bg-slate-800 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition pointer-events-none whitespace-nowrap z-50 border border-slate-700 shadow-xl">
-            {tooltip}
-        </span>
-    </button>
-);
 
 export default App;
