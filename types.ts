@@ -121,6 +121,7 @@ export interface PhysicsField {
     ex: string;
     ey: string;
   };
+  customType?: 'ELECTRIC' | 'MAGNETIC'; // Modality of the custom field
 
   visible: boolean;
 }
@@ -132,6 +133,7 @@ export interface SimulationState {
   time: number;
   paused: boolean;
   gravity: Vector2;
+  enableCoulomb: boolean; // New: Global switch for N-body interaction
   selectedBodyId: string | null;
   selectedFieldId: string | null;
   selectedConstraintId: string | null;

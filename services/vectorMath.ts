@@ -1,4 +1,5 @@
 
+
 import { Vector2 } from '../types';
 
 export const Vec2 = {
@@ -27,11 +28,11 @@ export const Vec2 = {
   }),
   // Transform local point to world space
   transform: (v: Vector2, pos: Vector2, angle: number): Vector2 => {
-    const rot = {
-        x: v.x * Math.cos(angle) - v.y * Math.sin(angle),
-        y: v.x * Math.sin(angle) + v.y * Math.cos(angle)
-    };
-    return { x: rot.x + pos.x, y: rot.y + pos.y };
+      const rot = {
+          x: v.x * Math.cos(angle) - v.y * Math.sin(angle),
+          y: v.x * Math.sin(angle) + v.y * Math.cos(angle)
+      };
+      return { x: rot.x + pos.x, y: rot.y + pos.y };
   },
   // Inverse Transform: World to Local
   invTransform: (v: Vector2, pos: Vector2, angle: number): Vector2 => {
@@ -70,10 +71,50 @@ export const Vec2 = {
       }
       return null;
   },
+
+  // Intersection of two segments
+  segmentIntersection: (p1: Vector2, p2: Vector2, p3: Vector2, p4: Vector2): Vector2 | null => {
+      const d = (p2.x - p1.x) * (p4.y - p3.y) - (p2.y - p1.y) * (p4.x - p3.x);
+      if (d === 0) return null;
+      const u = ((p3.x - p1.x) * (p4.y - p3.y) - (p3.y - p1.y) * (p4.x - p3.x)) / d;
+      const v = ((p3.x - p1.x) * (p2.y - p1.y) - (p3.y - p1.y) * (p2.x - p1.x)) / d;
+      if (u >= 0 && u <= 1 && v >= 0 && v <= 1) {
+          return { x: p1.x + u * (p2.x - p1.x), y: p1.y + u * (p2.y - p1.y) };
+      }
+      return null;
+  },
   
-  // Signed area to determine side of line (Cross product of (B-A) and (P-A))
-  // > 0 Left, < 0 Right, 0 On Line
+
   crossProductZ: (a: Vector2, b: Vector2, p: Vector2): number => {
       return (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+  },
+
+
+  convexHull: (points: Vector2[]): Vector2[] => {
+      if (points.length < 3) return points;
+      const sorted = [...points].sort((a, b) => a.x === b.x ? a.y - b.y : a.x - b.x);
+      
+      const cross = (o: Vector2, a: Vector2, b: Vector2) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+
+      const lower: Vector2[] = [];
+      for (const p of sorted) {
+          while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
+              lower.pop();
+          }
+          lower.push(p);
+      }
+
+      const upper: Vector2[] = [];
+      for (let i = sorted.length - 1; i >= 0; i--) {
+          const p = sorted[i];
+          while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
+              upper.pop();
+          }
+          upper.push(p);
+      }
+
+      upper.pop();
+      lower.pop();
+      return lower.concat(upper);
   }
 };

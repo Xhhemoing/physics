@@ -98,7 +98,7 @@ const DataCharts: React.FC<Props> = ({ selectedBodyId, state, isPinned, onToggle
         const a = Vec2.mag(body.acceleration);
         const ke = 0.5 * body.mass * v * v;
         
-        historyRef.current.push({
+        const pt = {
             t: state.time,
             x: body.position.x,
             y: -body.position.y,
@@ -109,9 +109,13 @@ const DataCharts: React.FC<Props> = ({ selectedBodyId, state, isPinned, onToggle
             ay: -body.acceleration.y,
             a: a,
             ke: ke
-        });
-        
-        if (historyRef.current.length > HISTORY_LENGTH) historyRef.current.shift();
+        };
+
+        // Filter invalid data
+        if (Object.values(pt).every(val => Number.isFinite(val))) {
+            historyRef.current.push(pt);
+            if (historyRef.current.length > HISTORY_LENGTH) historyRef.current.shift();
+        }
         
         lastTimeRef.current = state.time;
         drawChart();
@@ -180,7 +184,7 @@ const DataCharts: React.FC<Props> = ({ selectedBodyId, state, isPinned, onToggle
     const yExtent = d3.extent(historyRef.current, getY) as [number, number];
     
     // Safety check for NaNs or Infinity
-    if (isNaN(xExtent[0]) || isNaN(yExtent[0])) return;
+    if (!Number.isFinite(xExtent[0]) || !Number.isFinite(yExtent[0])) return;
 
     const xRange = (xExtent[1] - xExtent[0]) || 1;
     const yRange = (yExtent[1] - yExtent[0]) || 1;

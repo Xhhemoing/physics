@@ -1,4 +1,5 @@
 
+
 import { BodyType, Constraint, ConstraintType, PhysicsBody, PhysicsField, FieldType, Vector2, FieldShape } from '../types';
 import { Vec2 } from './vectorMath';
 
@@ -9,9 +10,7 @@ import { Vec2 } from './vectorMath';
  */
 
 export class PhysicsEngine {
-  // Global settings
-  private restitutionThreshold = 0.5; 
-
+  
   /**
    * Main Step Function
    */
@@ -20,41 +19,60 @@ export class PhysicsEngine {
     bodies: PhysicsBody[],
     constraints: Constraint[],
     fields: PhysicsField[],
-    globalGravity: Vector2
+    globalGravity: Vector2,
+    enableCoulomb: boolean
   ): PhysicsBody[] {
     const subSteps = 8; // High substeps for stability
     const subDt = dt / subSteps;
 
-    const newBodies = bodies.map(b => {
-        // Clear force components at start of frame
-        const newB = { ...b };
-        newB.forceComponents = {}; 
-        return newB;
-    }); 
+    // Direct mutation for performance within the step, 
+    // but we clone the array structure to avoid React state mutation issues.
+    // Deep clone is expensive, so we clone the body objects.
+    const activeBodies = new Array(bodies.length);
+    for(let i=0; i<bodies.length; i++) {
+        const b = bodies[i];
+        // Create a shallow copy + forceComponents reset
+        activeBodies[i] = { ...b, forceComponents: {} }; 
+    }
 
     for (let i = 0; i < subSteps; i++) {
       const isLastSubstep = i === subSteps - 1;
 
-      // 1. Apply Forces
-      this.applyForces(newBodies, fields, globalGravity, isLastSubstep);
+      // 0. RESET FORCES
+      // Critical Fix: Forces must be reset every substep to prevent accumulation (Gravity anomaly)
+      for (const b of activeBodies) {
+          if (b.inverseMass === 0) {
+              b.force = {x: 0, y: 0};
+              continue;
+          }
+          // Start with constant applied force (e.g. thrusters)
+          b.force = b.constantForce ? { ...b.constantForce } : { x: 0, y: 0 };
+          
+          if (isLastSubstep && Vec2.magSq(b.force) > 0) {
+             this.addForceComponent(b, 'Applied', b.force);
+          }
+      }
+
+      // 1. Apply Forces (Gravity, Fields, Coulomb)
+      this.applyForces(activeBodies, fields, globalGravity, enableCoulomb, isLastSubstep);
       
       // 2. Apply Constraint Forces (Springs - Soft Constraints)
-      this.applySprings(newBodies, constraints, isLastSubstep);
+      this.applySprings(activeBodies, constraints, isLastSubstep);
 
       // 3. Integrate Velocity (Symplectic Euler Part 1)
-      this.integrateVelocity(newBodies, subDt);
+      this.integrateVelocity(activeBodies, subDt);
 
       // 4. Resolve Collisions (Impulse-based with SAT)
-      this.resolveCollisions(newBodies, subDt, globalGravity, isLastSubstep);
+      this.resolveCollisions(activeBodies, subDt, globalGravity, isLastSubstep);
       
       // 5. Resolve Hard Constraints (Rod, Pin)
-      this.resolveHardConstraints(newBodies, constraints, subDt);
+      this.resolveHardConstraints(activeBodies, constraints, subDt);
 
       // 6. Integrate Position (Symplectic Euler Part 2)
-      this.integratePosition(newBodies, subDt);
+      this.integratePosition(activeBodies, subDt);
     }
 
-    return newBodies;
+    return activeBodies;
   }
 
   private addForceComponent(body: PhysicsBody, name: string, force: Vector2) {
@@ -64,6 +82,7 @@ export class PhysicsEngine {
   }
 
   private isPointInPolygon(point: Vector2, vertices: Vector2[]): boolean {
+      if (!vertices || vertices.length < 3) return false;
       let inside = false;
       for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
           const xi = vertices[i].x, yi = vertices[i].y;
@@ -78,9 +97,7 @@ export class PhysicsEngine {
 
   private evaluateEquation(eq: string, x: number, y: number, t: number): number {
       try {
-          // Warning: new Function is used here for sandbox flexibility. 
-          // In a production app with user auth, this requires sanitization.
-          // Variables available: x, y, t, Math
+          // Optimization: Simple eval check, ideally should be parsed once
           const f = new Function('x', 'y', 't', `with(Math){ return ${eq}; }`);
           const res = f(x, y, t);
           return isNaN(res) ? 0 : res;
@@ -89,17 +106,48 @@ export class PhysicsEngine {
       }
   }
 
-  private applyForces(bodies: PhysicsBody[], fields: PhysicsField[], gravity: Vector2, isLastSubstep: boolean) {
-    bodies.forEach(body => {
-      if (body.inverseMass === 0) return; // Static body
+  private applyForces(bodies: PhysicsBody[], fields: PhysicsField[], gravity: Vector2, enableCoulomb: boolean, isLastSubstep: boolean) {
+    // N-Body Coulomb Interaction
+    if (enableCoulomb) {
+        // Reduced constant for stability
+        const k = 2000; 
+        for (let i = 0; i < bodies.length; i++) {
+            const b1 = bodies[i];
+            if (!b1.charge) continue;
 
-      // Reset force to zero initially or use stored constant force
-      const constForce = body.constantForce ? { ...body.constantForce } : { x: 0, y: 0 };
-      body.force = constForce;
-      
-      if (isLastSubstep && Vec2.magSq(constForce) > 0) {
-          this.addForceComponent(body, 'Applied', constForce);
-      }
+            for (let j = i + 1; j < bodies.length; j++) {
+                const b2 = bodies[j];
+                if (!b2.charge) continue;
+                if (b1.inverseMass === 0 && b2.inverseMass === 0) continue;
+
+                const rVec = Vec2.sub(b1.position, b2.position);
+                const rSq = Vec2.magSq(rVec);
+                
+                // Prevent singularity
+                if (rSq < 100) continue; 
+
+                const r = Math.sqrt(rSq);
+                // F = k * q1 * q2 / r^2
+                const fMag = (k * b1.charge * b2.charge) / rSq;
+                const fDir = Vec2.div(rVec, r);
+                const f = Vec2.mul(fDir, fMag); 
+
+                if (b1.inverseMass !== 0) {
+                    b1.force = Vec2.add(b1.force, f);
+                    if (isLastSubstep) this.addForceComponent(b1, 'Coulomb', f);
+                }
+                if (b2.inverseMass !== 0) {
+                    const fNeg = Vec2.mul(f, -1);
+                    b2.force = Vec2.add(b2.force, fNeg); // Newton's 3rd Law
+                    if (isLastSubstep) this.addForceComponent(b2, 'Coulomb', fNeg);
+                }
+            }
+        }
+    }
+
+    // Single body forces
+    for (const body of bodies) {
+      if (body.inverseMass === 0) continue; // Static body
 
       // 1. Global Gravity
       // F = m * g
@@ -108,11 +156,10 @@ export class PhysicsEngine {
       if (isLastSubstep) this.addForceComponent(body, 'Gravity', fGravity);
 
       // 2. Field Forces
-      fields.forEach(field => {
+      for (const field of fields) {
         let inField = false;
 
         // Check if body center is in field
-        // (Simplification: Treats body as point for field interaction)
         if (field.shape === FieldShape.BOX) {
              inField = 
                 body.position.x >= field.position.x &&
@@ -135,6 +182,7 @@ export class PhysicsEngine {
                 if (isLastSubstep) this.addForceComponent(body, 'Electric', fElectric);
             } else if (field.type === FieldType.UNIFORM_MAGNETIC) {
                 const B = field.strength as number;
+                // F = q(v x B). 2D cross product: (vx, vy, 0) x (0, 0, B) = (vy*B, -vx*B, 0)
                 const fLorentz = {
                     x: body.velocity.y * B * body.charge,
                     y: -body.velocity.x * B * body.charge
@@ -147,16 +195,30 @@ export class PhysicsEngine {
                  body.force = Vec2.add(body.force, fAreaG);
                  if (isLastSubstep) this.addForceComponent(body, 'Gravity', fAreaG);
             } else if (field.type === FieldType.CUSTOM && field.equations) {
-                // Calculate Custom Field Strength at body position
-                // Normalize pos relative to field center/start? Let's use world coords for power.
-                const Ex = this.evaluateEquation(field.equations.ex, body.position.x, body.position.y, 0);
-                const Ey = this.evaluateEquation(field.equations.ey, body.position.x, body.position.y, 0);
-                const fCustom = Vec2.mul({x: Ex, y: Ey}, body.charge);
+                const val1 = this.evaluateEquation(field.equations.ex, body.position.x, body.position.y, 0);
+                const val2 = this.evaluateEquation(field.equations.ey, body.position.x, body.position.y, 0);
+                
+                let fCustom = {x:0, y:0};
+                // Check if it acts as Magnetic field (velocity dependent)
+                if (field.customType === 'MAGNETIC') {
+                    // Assume val1 is B magnitude (scalar)
+                    const B = val1;
+                     fCustom = {
+                        x: body.velocity.y * B * body.charge,
+                        y: -body.velocity.x * B * body.charge
+                    };
+                    if (isLastSubstep) this.addForceComponent(body, 'Magnetic', fCustom);
+                } else {
+                    // Default Electric (Force)
+                    // F = qE
+                    const E = { x: val1, y: val2 };
+                    fCustom = Vec2.mul(E, body.charge);
+                    if (isLastSubstep) this.addForceComponent(body, 'Electric', fCustom);
+                }
                 body.force = Vec2.add(body.force, fCustom);
-                if (isLastSubstep) this.addForceComponent(body, 'Custom', fCustom);
             }
         }
-      });
+      }
       
       // 3. Air Drag
       const dragCoeff = 0.005;
@@ -165,18 +227,17 @@ export class PhysicsEngine {
       body.force = Vec2.add(body.force, fDrag);
 
       body.angularVelocity *= (1 - rotDrag * 0.01); 
-    });
+    }
   }
 
-  // ... (Rest of the file remains unchanged, keeping applySprings, integrateVelocity, etc.)
   private applySprings(bodies: PhysicsBody[], constraints: Constraint[], isLastSubstep: boolean) {
-    constraints.forEach(c => {
-      if (c.type !== ConstraintType.SPRING) return;
+    for (const c of constraints) {
+      if (c.type !== ConstraintType.SPRING) continue;
 
       const bodyA = bodies.find(b => b.id === c.bodyAId);
       const bodyB = bodies.find(b => b.id === c.bodyBId);
 
-      if (!bodyA || !bodyB) return;
+      if (!bodyA || !bodyB) continue;
 
       const rA = Vec2.rotate(c.localAnchorA, bodyA.angle);
       const rB = Vec2.rotate(c.localAnchorB, bodyB.angle);
@@ -210,24 +271,26 @@ export class PhysicsEngine {
 
         if (isLastSubstep) this.addForceComponent(bodyB, 'Spring', totalForce);
       }
-    });
+    }
   }
 
   private integrateVelocity(bodies: PhysicsBody[], dt: number) {
-    bodies.forEach(body => {
-      if (body.inverseMass === 0) return;
+    for (const body of bodies) {
+      if (body.inverseMass === 0) continue;
+      // Symplectic Euler: v += a * dt
       const acc = Vec2.mul(body.force, body.inverseMass);
       body.acceleration = acc; 
       body.velocity = Vec2.add(body.velocity, Vec2.mul(acc, dt));
-    });
+    }
   }
 
   private integratePosition(bodies: PhysicsBody[], dt: number) {
-    bodies.forEach(body => {
-      if (body.inverseMass === 0) return;
+    for (const body of bodies) {
+      if (body.inverseMass === 0) continue;
+      // Symplectic Euler: x += v * dt
       body.position = Vec2.add(body.position, Vec2.mul(body.velocity, dt));
       body.angle += body.angularVelocity * dt;
-    });
+    }
   }
 
   private resolveCollisions(bodies: PhysicsBody[], dt: number, gravity: Vector2, isLastSubstep: boolean) {
@@ -244,8 +307,9 @@ export class PhysicsEngine {
             const { normal, depth } = manifold;
             
             // 1. Positional Correction (Baumgarte)
-            const percent = 0.2; 
-            const slop = 0.05; 
+            // Fix: Reduced percentage and slop to prevent jitter on smooth surfaces
+            const percent = 0.4; 
+            const slop = 0.02; 
             const correctionMag = Math.max(depth - slop, 0) / (bodyA.inverseMass + bodyB.inverseMass) * percent;
             const correction = Vec2.mul(normal, correctionMag);
             
@@ -259,11 +323,14 @@ export class PhysicsEngine {
             const relVel = Vec2.sub(vB, vA);
             const velAlongNormal = Vec2.dot(relVel, normal);
 
+            // Fix: If already separating, do not apply impulse
             if (velAlongNormal > 0) continue;
 
             let e = Math.min(bodyA.restitution, bodyB.restitution);
             const gravityMag = Vec2.mag(gravity);
-            if (Math.abs(velAlongNormal) < gravityMag * dt * 8) {
+            
+            // Resting contact threshold
+            if (Math.abs(velAlongNormal) < gravityMag * dt * 4) {
                 e = 0;
             }
 
@@ -275,67 +342,66 @@ export class PhysicsEngine {
             if (bodyA.inverseMass !== 0) bodyA.velocity = Vec2.sub(bodyA.velocity, Vec2.mul(impulse, bodyA.inverseMass));
             if (bodyB.inverseMass !== 0) bodyB.velocity = Vec2.add(bodyB.velocity, Vec2.mul(impulse, bodyB.inverseMass));
             
-            // Calculate effective Normal Force for visualization: F = J / dt
             if (isLastSubstep) {
                 const fNormal = Vec2.div(impulse, dt);
-                // Force on A is -Impulse, Force on B is +Impulse
                 if (bodyA.inverseMass !== 0) this.addForceComponent(bodyA, 'Normal', Vec2.mul(fNormal, -1));
                 if (bodyB.inverseMass !== 0) this.addForceComponent(bodyB, 'Normal', fNormal);
             }
 
             // 3. Friction
-            let tangent = Vec2.sub(relVel, Vec2.mul(normal, velAlongNormal));
-            const tangentMag = Vec2.mag(tangent);
-            if (tangentMag > 0.0001) {
-                tangent = Vec2.div(tangent, tangentMag);
-            } else {
-                tangent = {x:0, y:0};
-            }
-
-            let surfaceVelA = 0;
-            if (bodyA.surfaceSpeed) surfaceVelA = bodyA.surfaceSpeed;
-
-            let jTangent = -Vec2.dot(relVel, tangent) / (bodyA.inverseMass + bodyB.inverseMass);
+            // Fix: Handle zero friction correctly on smooth tracks
             const mu = Math.sqrt(bodyA.friction * bodyB.friction);
             
-            let frictionImpulse: Vector2;
+            if (mu > 0.001) {
+                let tangent = Vec2.sub(relVel, Vec2.mul(normal, velAlongNormal));
+                const tangentMag = Vec2.mag(tangent);
+                
+                if (tangentMag > 0.0001) {
+                    tangent = Vec2.div(tangent, tangentMag);
+                    
+                    let surfaceVelA = bodyA.surfaceSpeed || 0;
 
-            if (surfaceVelA !== 0 && bodyA.inverseMass === 0) {
-                 const convDir = Vec2.rotate({x:1, y:0}, bodyA.angle);
-                 const convVel = Vec2.mul(convDir, surfaceVelA);
-                 const relVelWithConv = Vec2.sub(vB, Vec2.add(vA, convVel));
-                 
-                 const vn = Vec2.dot(relVelWithConv, normal);
-                 let vtVec = Vec2.sub(relVelWithConv, Vec2.mul(normal, vn));
-                 const vtMag = Vec2.mag(vtVec);
-                 let tConv = {x:0, y:0};
-                 if (vtMag > 0.0001) tConv = Vec2.div(vtVec, vtMag);
+                    let jTangent = -Vec2.dot(relVel, tangent) / (bodyA.inverseMass + bodyB.inverseMass);
+                    
+                    let frictionImpulse: Vector2;
 
-                 const jtConv = -Vec2.dot(relVelWithConv, tConv) / (bodyA.inverseMass + bodyB.inverseMass);
-                 
-                 let fImp = jtConv;
-                 const maxFriction = jScalar * mu;
-                 if (Math.abs(fImp) > maxFriction) {
-                     fImp = Math.sign(fImp) * maxFriction;
-                 }
-                 frictionImpulse = Vec2.mul(tConv, fImp);
+                    if (surfaceVelA !== 0 && bodyA.inverseMass === 0) {
+                         const convDir = Vec2.rotate({x:1, y:0}, bodyA.angle);
+                         const convVel = Vec2.mul(convDir, surfaceVelA);
+                         const relVelWithConv = Vec2.sub(vB, Vec2.add(vA, convVel));
+                         
+                         const vn = Vec2.dot(relVelWithConv, normal);
+                         let vtVec = Vec2.sub(relVelWithConv, Vec2.mul(normal, vn));
+                         const vtMag = Vec2.mag(vtVec);
+                         let tConv = {x:0, y:0};
+                         if (vtMag > 0.0001) tConv = Vec2.div(vtVec, vtMag);
 
-            } else {
-                if (Math.abs(jTangent) < jScalar * mu) {
-                    frictionImpulse = Vec2.mul(tangent, jTangent);
-                } else {
-                    frictionImpulse = Vec2.mul(tangent, -jScalar * mu);
+                         const jtConv = -Vec2.dot(relVelWithConv, tConv) / (bodyA.inverseMass + bodyB.inverseMass);
+                         
+                         let fImp = jtConv;
+                         const maxFriction = jScalar * mu;
+                         if (Math.abs(fImp) > maxFriction) {
+                             fImp = Math.sign(fImp) * maxFriction;
+                         }
+                         frictionImpulse = Vec2.mul(tConv, fImp);
+
+                    } else {
+                        if (Math.abs(jTangent) < jScalar * mu) {
+                            frictionImpulse = Vec2.mul(tangent, jTangent);
+                        } else {
+                            frictionImpulse = Vec2.mul(tangent, -jScalar * mu);
+                        }
+                    }
+
+                    if (bodyA.inverseMass !== 0) bodyA.velocity = Vec2.sub(bodyA.velocity, Vec2.mul(frictionImpulse, bodyA.inverseMass));
+                    if (bodyB.inverseMass !== 0) bodyB.velocity = Vec2.add(bodyB.velocity, Vec2.mul(frictionImpulse, bodyB.inverseMass));
+                    
+                    if (isLastSubstep) {
+                        const fFriction = Vec2.div(frictionImpulse, dt);
+                        if (bodyA.inverseMass !== 0) this.addForceComponent(bodyA, 'Friction', Vec2.mul(fFriction, -1));
+                        if (bodyB.inverseMass !== 0) this.addForceComponent(bodyB, 'Friction', fFriction);
+                    }
                 }
-            }
-
-            if (bodyA.inverseMass !== 0) bodyA.velocity = Vec2.sub(bodyA.velocity, Vec2.mul(frictionImpulse, bodyA.inverseMass));
-            if (bodyB.inverseMass !== 0) bodyB.velocity = Vec2.add(bodyB.velocity, Vec2.mul(frictionImpulse, bodyB.inverseMass));
-            
-            // Calculate effective Friction Force
-            if (isLastSubstep) {
-                const fFriction = Vec2.div(frictionImpulse, dt);
-                if (bodyA.inverseMass !== 0) this.addForceComponent(bodyA, 'Friction', Vec2.mul(fFriction, -1));
-                if (bodyB.inverseMass !== 0) this.addForceComponent(bodyB, 'Friction', fFriction);
             }
         }
       }
@@ -420,6 +486,7 @@ export class PhysicsEngine {
   private satPolygonPolygon(a: PhysicsBody, b: PhysicsBody): { normal: Vector2, depth: number } | null {
       const vertsA = this.getWorldVertices(a);
       const vertsB = this.getWorldVertices(b);
+      if (vertsA.length === 0 || vertsB.length === 0) return null;
 
       let normal = Vec2.zero();
       let depth = Number.MAX_VALUE;
@@ -470,6 +537,8 @@ export class PhysicsEngine {
 
   private satPolygonCircle(poly: PhysicsBody, circle: PhysicsBody): { normal: Vector2, depth: number } | null {
       const verts = this.getWorldVertices(poly);
+      if (verts.length === 0) return null;
+
       let normal = Vec2.zero();
       let depth = Number.MAX_VALUE;
 
@@ -590,7 +659,12 @@ export class PhysicsEngine {
       const d = Vec2.sub(circle.position, arc.position);
       const dist = Vec2.mag(d);
       
-      if (Math.abs(dist - rArc) < rCirc) {
+      // Fix: Treat as thin wire (one-sided or two-sided, we assume track style - inside or outside matters)
+      // If we are ON the arc, distance to center is approx rArc.
+      // Thickness is effectively 0 for logic, but we need detection tolerance.
+      const tolerance = rCirc + 10;
+      
+      if (Math.abs(dist - rArc) < tolerance) {
           const angle = Math.atan2(d.y, d.x); 
           const start = arc.arcStartAngle || 0;
           const end = arc.arcEndAngle || Math.PI;
@@ -600,6 +674,7 @@ export class PhysicsEngine {
           const nEnd = norm(end);
 
           let inArc = false;
+          // Handle wrap-around
           if (nStart < nEnd) {
               inArc = nA >= nStart && nA <= nEnd;
           } else {
@@ -608,14 +683,35 @@ export class PhysicsEngine {
 
           if (inArc) {
               const normal = Vec2.normalize(d); 
-              const pen = rCirc - Math.abs(dist - rArc);
+              let depth = 0;
+
+              // If inside the arc (dist < rArc), push IN towards center (normal -) if closer to band
+              // If outside (dist > rArc), push OUT (normal +)
               
-              let n = normal;
               if (dist < rArc) {
-                  n = Vec2.mul(normal, -1); 
+                  // Inside
+                  depth = (rArc - dist) - rCirc; // overlap
+                  // If depth is positive (we are too deep), we need to push back?
+                  // Actually standard collision: overlap = (r_a + r_b) - dist.
+                  // Here, it's a wire. 
+                  // dist + rCirc > rArc -> overlap.
+                  // penetration = (dist + rCirc) - rArc.
+                  const penetration = (dist + rCirc) - rArc;
+                  if (penetration > 0) {
+                      return { normal: Vec2.mul(normal, -1), depth: penetration };
+                  }
+              } else {
+                  // Outside
+                  // dist - rCirc < rArc -> overlap.
+                  const penetration = rArc - (dist - rCirc); // Wait.
+                  // Outside means dist > rArc.
+                  // Touch if dist - rCirc < rArc.
+                  // penetration = rCirc - (dist - rArc).
+                  const p = rCirc - (dist - rArc);
+                  if (p > 0) {
+                      return { normal: normal, depth: p };
+                  }
               }
-              
-              return { normal: n, depth: pen };
           }
       }
       return null;
@@ -637,9 +733,7 @@ export class PhysicsEngine {
           const d = Vec2.sub(v, arc.position);
           const dist = Vec2.mag(d);
           
-          const halfWidth = 5; 
-          
-          if (Math.abs(dist - rArc) < halfWidth) {
+          if (Math.abs(dist - rArc) < 20) { // Check proximity
               const angle = Math.atan2(d.y, d.x);
               const nA = norm(angle);
 
@@ -651,13 +745,26 @@ export class PhysicsEngine {
               }
 
               if (inArc) {
-                  const depth = halfWidth - Math.abs(dist - rArc);
+                  // Simple vertex penetration check
+                  let n = Vec2.normalize(d);
+                  let depth = 0;
+                  
+                  if (dist < rArc) {
+                      // Inside, push inwards (towards center? no, away from arc line)
+                      // Arc line is at rArc. v is at dist.
+                      // depth = dist - (rArc - epsilon)? No.
+                      // Penetration into the wall.
+                      // Assuming thin wall.
+                      depth = 5 - (rArc - dist); // Arbitrary thickness 5
+                      if (depth > 0) {
+                          n = Vec2.mul(n, -1); // Push towards center
+                      }
+                  } else {
+                      depth = 5 - (dist - rArc);
+                  }
+
                   if (depth > maxDepth) {
                       maxDepth = depth;
-                      let n = Vec2.normalize(d);
-                      if (dist < rArc) {
-                          n = Vec2.mul(n, -1); 
-                      }
                       collisionNormal = n;
                   }
               }
@@ -671,12 +778,12 @@ export class PhysicsEngine {
   }
 
   private resolveHardConstraints(bodies: PhysicsBody[], constraints: Constraint[], dt: number) {
-    constraints.forEach(c => {
-        if (c.type === ConstraintType.SPRING) return;
+    for (const c of constraints) {
+        if (c.type === ConstraintType.SPRING) continue;
 
         const bodyA = bodies.find(b => b.id === c.bodyAId);
         const bodyB = bodies.find(b => b.id === c.bodyBId);
-        if (!bodyA || !bodyB) return;
+        if (!bodyA || !bodyB) continue;
 
         const rA = Vec2.rotate(c.localAnchorA, bodyA.angle);
         const rB = Vec2.rotate(c.localAnchorB, bodyB.angle);
@@ -746,6 +853,65 @@ export class PhysicsEngine {
                  }
              }
         }
-    });
+    }
+  }
+
+  // --- Utility for Cutting ---
+  public splitBody(body: PhysicsBody, p1: Vector2, p2: Vector2): PhysicsBody[] | null {
+      const verts = this.getWorldVertices(body);
+      if (verts.length < 3) return null; // Can only split polygons/boxes
+
+      const poly1: Vector2[] = [];
+      const poly2: Vector2[] = [];
+
+      // Check which side of line p1-p2 each vertex is
+      // Cross product (p2-p1) x (v-p1)
+      const isLeft = (v: Vector2) => {
+          return (p2.x - p1.x)*(v.y - p1.y) - (p2.y - p1.y)*(v.x - p1.x) > 0;
+      };
+
+      for (let i = 0; i < verts.length; i++) {
+          const cur = verts[i];
+          const next = verts[(i + 1) % verts.length];
+          const curLeft = isLeft(cur);
+          const nextLeft = isLeft(next);
+
+          if (curLeft) poly1.push(cur); else poly2.push(cur);
+
+          if (curLeft !== nextLeft) {
+              const intersection = Vec2.getLineSegmentIntersection(p1, p2, cur, next);
+              if (intersection) {
+                  poly1.push(intersection);
+                  poly2.push(intersection);
+              }
+          }
+      }
+
+      if (poly1.length < 3 || poly2.length < 3) return null;
+
+      // Create 2 new bodies
+      const createPart = (vs: Vector2[], idSuffix: string): PhysicsBody => {
+          // Centroid
+          let cx = 0, cy = 0;
+          vs.forEach(v => { cx += v.x; cy += v.y; });
+          cx /= vs.length; cy /= vs.length;
+          const center = {x: cx, y: cy};
+          const localVs = vs.map(v => ({x: v.x - center.x, y: v.y - center.y}));
+
+          return {
+              ...body,
+              id: body.id + idSuffix,
+              type: BodyType.POLYGON,
+              position: center,
+              vertices: localVs,
+              mass: body.mass / 2, 
+              inverseMass: body.inverseMass === 0 ? 0 : body.inverseMass * 2,
+              angle: 0, 
+              angularVelocity: body.angularVelocity,
+              selected: false
+          };
+      };
+
+      return [createPart(poly1, '_A'), createPart(poly2, '_B')];
   }
 }

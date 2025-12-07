@@ -1,4 +1,5 @@
 
+
 import React from 'react';
 import { PhysicsBody, BodyType, PhysicsField, FieldType, Vector2, FieldShape, Constraint, ConstraintType } from '../types';
 
@@ -26,6 +27,17 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
               [axis]: current + text 
           } 
       });
+  };
+
+  const setEquationPreset = (preset: string) => {
+      if (!field || field.type !== FieldType.CUSTOM) return;
+      let ex = "0", ey = "0";
+      switch(preset) {
+          case 'wave': ex = "Math.sin(x/50 + t) * 50"; ey = "Math.cos(y/50 + t) * 50"; break;
+          case 'vortex': ex = "-y + 200"; ey = "x - 400"; break;
+          case 'repel': ex = "2000/(x - 400)"; ey = "2000/(y - 300)"; break;
+      }
+      onUpdateField(field.id, { equations: { ex, ey } });
   };
 
   // --- Constraint Panel ---
@@ -133,8 +145,35 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
 
                   {field.type === FieldType.CUSTOM ? (
                       <div className="space-y-3 p-2 bg-slate-800/50 rounded border border-slate-700">
-                          <p className="text-[10px] text-slate-400">输入场强度(E/B)关于 x, y, t 的方程。支持 Math 库。</p>
+                          <div>
+                              <label className="block text-[10px] text-slate-400 mb-1 uppercase">方程模式 Mode</label>
+                              <div className="flex gap-2">
+                                  <button 
+                                    onClick={() => onUpdateField(field.id, { customType: 'ELECTRIC' })}
+                                    className={`flex-1 text-xs py-1 rounded ${!field.customType || field.customType === 'ELECTRIC' ? 'bg-pink-600 text-white' : 'bg-slate-700 text-slate-400'}`}
+                                  >
+                                    电场 (Force)
+                                  </button>
+                                  <button 
+                                    onClick={() => onUpdateField(field.id, { customType: 'MAGNETIC' })}
+                                    className={`flex-1 text-xs py-1 rounded ${field.customType === 'MAGNETIC' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-400'}`}
+                                  >
+                                    磁场 (Velocity)
+                                  </button>
+                              </div>
+                          </div>
+
+                          <p className="text-[10px] text-slate-400">
+                             {field.customType === 'MAGNETIC' 
+                                ? '磁场模式: Ex 计算为磁感应强度 B (Tesla)。Ey 被忽略。' 
+                                : '电场模式: Ex, Ey 计算为电场强度向量 E (N/C)。'}
+                          </p>
                           
+                          <div className="flex gap-2">
+                              <button onClick={() => setEquationPreset('wave')} className="text-[10px] bg-slate-700 px-2 py-1 rounded">波动</button>
+                              <button onClick={() => setEquationPreset('vortex')} className="text-[10px] bg-slate-700 px-2 py-1 rounded">旋涡</button>
+                          </div>
+
                           <div className="space-y-2">
                              <div className="flex flex-wrap gap-1">
                                 {['sin(t)', 'cos(t)', 'x', 'y', 't', 'sqrt()', 'abs()'].map(fn => (
@@ -148,36 +187,29 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
                                     </button>
                                 ))}
                              </div>
-                             <div className="flex flex-wrap gap-1">
-                                {['sin(t)', 'cos(t)', 'x', 'y', 't', 'sqrt()', 'abs()'].map(fn => (
-                                    <button 
-                                        key={fn}
-                                        onClick={() => insertText(fn, 'ey')} 
-                                        className="bg-slate-700 hover:bg-slate-600 text-[10px] text-white rounded px-1.5 py-0.5"
-                                        title="Insert to Ey"
-                                    >
-                                        Ey:{fn}
-                                    </button>
-                                ))}
-                             </div>
                           </div>
 
                           <div>
-                              <label className="block text-[10px] text-pink-400 mb-1 font-mono">X 分量 (Ex) =</label>
+                              <label className="block text-[10px] text-pink-400 mb-1 font-mono">
+                                  {field.customType === 'MAGNETIC' ? '磁场强度 B =' : 'X 分量 Ex ='}
+                              </label>
                               <textarea
                                   value={field.equations?.ex || "0"}
                                   onChange={(e) => onUpdateField(field.id, { equations: { ex: e.target.value, ey: field.equations?.ey || "0" } })}
                                   className="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs font-mono h-16 outline-none resize-none"
                               />
                           </div>
-                          <div>
-                              <label className="block text-[10px] text-pink-400 mb-1 font-mono">Y 分量 (Ey) =</label>
-                              <textarea
-                                  value={field.equations?.ey || "0"}
-                                  onChange={(e) => onUpdateField(field.id, { equations: { ey: e.target.value, ex: field.equations?.ex || "0" } })}
-                                  className="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs font-mono h-16 outline-none resize-none"
-                              />
-                          </div>
+                          
+                          {(!field.customType || field.customType === 'ELECTRIC') && (
+                              <div>
+                                  <label className="block text-[10px] text-pink-400 mb-1 font-mono">Y 分量 Ey =</label>
+                                  <textarea
+                                      value={field.equations?.ey || "0"}
+                                      onChange={(e) => onUpdateField(field.id, { equations: { ey: e.target.value, ex: field.equations?.ex || "0" } })}
+                                      className="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs font-mono h-16 outline-none resize-none"
+                                  />
+                              </div>
+                          )}
                       </div>
                   ) : field.type === FieldType.UNIFORM_MAGNETIC ? (
                       <div>
