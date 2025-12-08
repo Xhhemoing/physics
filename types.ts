@@ -57,6 +57,7 @@ export interface PhysicsBody {
   
   // Special Flags
   isParticle?: boolean; // If true, renders as a point, ignores radius for visual
+  isHollow?: boolean; // If true, treated as a chain of edges (for containers/tracks)
   
   // Arc Specific
   arcStartAngle?: number; // Radians
@@ -74,7 +75,8 @@ export interface PhysicsBody {
 export enum ConstraintType {
   SPRING = 'SPRING',
   ROD = 'ROD',
-  PIN = 'PIN' // Revolute Joint
+  PIN = 'PIN', // Revolute Joint
+  ROPE = 'ROPE' // Inelastic Rope (Slack allowed)
 }
 
 export interface Constraint {

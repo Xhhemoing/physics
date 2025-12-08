@@ -1,7 +1,6 @@
 
-
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Play, Pause, RotateCcw, MousePointer2, Camera, Download, Link, Eclipse, MoveRight, Upload, Zap, Activity, Minus, Plus, Scan, Crosshair, ChevronDown, ChevronRight, Globe, Layers, Settings, Clock, Timer, Trash2, Scissors, Group, Combine, Pentagon } from 'lucide-react';
+import { Play, Pause, RotateCcw, MousePointer2, Camera, Download, Link, Eclipse, MoveRight, Upload, Zap, Activity, Minus, Plus, Scan, Crosshair, ChevronDown, ChevronRight, Globe, Layers, Settings, Clock, Timer, Trash2, Scissors, Group, Combine, Pentagon, Calculator, X } from 'lucide-react';
 import SimulationCanvas, { CanvasRef } from './components/SimulationCanvas';
 import PropertiesPanel from './components/PropertiesPanel';
 import DataCharts from './components/DataCharts';
@@ -98,6 +97,10 @@ const App: React.FC = () => {
   const [showGlobalSettings, setShowGlobalSettings] = useState(false);
   const [combineSelection, setCombineSelection] = useState<string[]>([]);
   
+  // Equation Builder State
+  const [showEquationBuilder, setShowEquationBuilder] = useState(false);
+  const [eqParams, setEqParams] = useState({ x: "100 * Math.cos(t)", y: "100 * Math.sin(t)", tStart: 0, tEnd: 6.28, steps: 50, isHollow: false });
+
   const engineRef = useRef(new PhysicsEngine());
   const canvasRef = useRef<CanvasRef>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -160,10 +163,6 @@ const App: React.FC = () => {
                       }));
                   }
               }
-          } else {
-              // Try to cut ANY body under the line? 
-              // Simplification: Iterate all and cut first valid
-              // For now, only selected body or first hit
           }
       };
       window.addEventListener('canvas-cut', handleCut);
@@ -176,7 +175,7 @@ const App: React.FC = () => {
   
   const handleSelectBody = (id: string | null) => {
       // Constraint Construction Logic
-      if (['add_spring', 'add_rod', 'add_pin'].includes(dragMode) && id) {
+      if (['add_spring', 'add_rod', 'add_pin', 'add_rope'].includes(dragMode) && id) {
           if (!constraintBuilder) {
               setConstraintBuilder(id);
           } else if (constraintBuilder !== id) {
@@ -185,7 +184,10 @@ const App: React.FC = () => {
               if (bodyA && bodyB) {
                   const newConstraint: Constraint = {
                       id: `c_${Date.now()}`,
-                      type: dragMode === 'add_spring' ? ConstraintType.SPRING : dragMode === 'add_rod' ? ConstraintType.ROD : ConstraintType.PIN,
+                      type: dragMode === 'add_spring' ? ConstraintType.SPRING 
+                          : dragMode === 'add_rod' ? ConstraintType.ROD 
+                          : dragMode === 'add_rope' ? ConstraintType.ROPE
+                          : ConstraintType.PIN,
                       bodyAId: constraintBuilder,
                       bodyBId: id,
                       localAnchorA: { x: 0, y: 0 }, 
@@ -444,7 +446,7 @@ const App: React.FC = () => {
         return;
     }
 
-    if (dragMode === 'add_spring' || dragMode === 'add_rod' || dragMode === 'add_pin') return;
+    if (dragMode === 'add_spring' || dragMode === 'add_rod' || dragMode === 'add_pin' || dragMode === 'add_rope') return;
     if (dragMode.startsWith('tool_') || dragMode.startsWith('add_field_') || dragMode === 'select_nodrag') return;
 
     const newId = `body_${Date.now()}`;
@@ -512,10 +514,21 @@ const App: React.FC = () => {
               if (e.target?.result) {
                   try {
                       const parsedState = JSON.parse(e.target.result as string);
-                      if (parsedState.bodies && parsedState.camera) { setState(parsedState); } else { alert("无效的场景文件"); }
+                      if (parsedState.bodies && parsedState.camera) { 
+                          // Completely reset state
+                          setState({
+                              ...INITIAL_STATE,
+                              ...parsedState,
+                              paused: true 
+                          });
+                      } else { 
+                          alert("无效的场景文件"); 
+                      }
                   } catch (err) { alert("JSON 解析错误"); }
               }
           };
+          // Reset file input so onChange triggers again for same file
+          event.target.value = '';
       }
   };
 
@@ -534,6 +547,45 @@ const App: React.FC = () => {
 
   const clearAll = () => {
       if (confirm("确定要清空所有对象吗?")) { setState({ ...INITIAL_STATE, camera: state.camera, paused: true }); setPinnedBodyId(null); setSnapshots([]); }
+  };
+  
+  const handleGenerateEquationBody = () => {
+      try {
+          const fx = new Function('t', `with(Math){ return ${eqParams.x} }`);
+          const fy = new Function('t', `with(Math){ return ${eqParams.y} }`);
+          const points: Vector2[] = [];
+          const step = (eqParams.tEnd - eqParams.tStart) / Math.max(3, eqParams.steps);
+          
+          for(let t = eqParams.tStart; t <= eqParams.tEnd; t += step) {
+              points.push({ x: fx(t), y: fy(t) });
+          }
+          
+          let cx = 0, cy = 0; points.forEach(p => { cx += p.x; cy += p.y; });
+          cx /= points.length; cy /= points.length;
+          const center = {x: cx, y: cy};
+          // Localize
+          const localVerts = points.map(p => ({ x: p.x - center.x, y: p.y - center.y }));
+
+          // Determine Mass (Static if hollow)
+          const mass = eqParams.isHollow ? 0 : 5;
+          const invMass = mass === 0 ? 0 : 1/mass;
+
+          const newBody: PhysicsBody = {
+             id: `eq_poly_${Date.now()}`,
+             type: BodyType.POLYGON,
+             position: center,
+             velocity: {x:0, y:0}, acceleration: {x:0, y:0}, force: {x:0, y:0}, constantForce: {x:0, y:0},
+             mass: mass, inverseMass: invMass, restitution: 0.5, friction: 0.5, charge: 0,
+             angle: 0, angularVelocity: 0, momentInertia: 100, inverseInertia: 0.01,
+             vertices: localVerts, color: eqParams.isHollow ? '#f59e0b' : '#14b8a6', 
+             selected: true, showTrajectory: false, trail: [],
+             isHollow: eqParams.isHollow
+          };
+          setState(s => ({ ...s, bodies: [...s.bodies, newBody], selectedBodyId: newBody.id }));
+          setShowEquationBuilder(false);
+      } catch (e) {
+          alert("方程错误: " + e);
+      }
   };
 
   const formatTime = (t: number) => {
@@ -625,6 +677,10 @@ const App: React.FC = () => {
                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_box" icon={<SquareIcon />} label="矩形" />
                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_particle" icon={<ParticleIcon />} label="质点" />
                   <ToolBtn mode={dragMode} setMode={(m) => { setDragMode(m); setPolyBuilder([]); }} target="add_poly" icon={<Pentagon size={18} />} label="多边形" />
+                  <button onClick={() => setShowEquationBuilder(true)} className="p-1.5 w-full rounded transition flex flex-col items-center text-slate-400 hover:bg-slate-800" title="方程生成">
+                      <Calculator size={18} />
+                      <span className="text-[9px] mt-0.5 scale-90">方程</span>
+                  </button>
               </CollapsibleGroup>
 
               {/* Group: Environment */}
@@ -659,6 +715,7 @@ const App: React.FC = () => {
               <CollapsibleGroup icon={<Link size={16} />} label="连接">
                    <ToolBtn mode={dragMode} setMode={setDragMode} target="add_spring" icon={<Activity size={18} />} label="弹簧" />
                    <ToolBtn mode={dragMode} setMode={setDragMode} target="add_rod" icon={<Link size={18} />} label="刚性杆" />
+                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_rope" icon={<Minus size={18} className="rotate-45" />} label="轻绳" />
                    <ToolBtn mode={dragMode} setMode={setDragMode} target="add_pin" icon={<Crosshair size={18} />} label="销钉" />
               </CollapsibleGroup>
 
@@ -698,6 +755,55 @@ const App: React.FC = () => {
                 rampCreation={rampBuilder}
                 constraintBuilder={constraintBuilder}
              />
+
+             {/* Equation Builder Modal */}
+             {showEquationBuilder && (
+                 <div className="absolute inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+                     <div className="bg-slate-900 border border-slate-700 rounded-lg shadow-2xl w-80 p-4">
+                         <div className="flex justify-between items-center mb-4 border-b border-slate-700 pb-2">
+                             <h3 className="text-white font-bold flex items-center gap-2"><Calculator size={16}/> 方程生成物体</h3>
+                             <button onClick={() => setShowEquationBuilder(false)} className="text-slate-400 hover:text-white"><X size={16}/></button>
+                         </div>
+                         <div className="space-y-3">
+                             <div>
+                                 <label className="text-xs text-slate-400 block mb-1">x(t) = </label>
+                                 <input type="text" value={eqParams.x} onChange={e => setEqParams({...eqParams, x: e.target.value})} className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs font-mono" />
+                             </div>
+                             <div>
+                                 <label className="text-xs text-slate-400 block mb-1">y(t) = </label>
+                                 <input type="text" value={eqParams.y} onChange={e => setEqParams({...eqParams, y: e.target.value})} className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs font-mono" />
+                             </div>
+                             <div className="grid grid-cols-3 gap-2">
+                                 <div>
+                                     <label className="text-[10px] text-slate-500 block">Start t</label>
+                                     <input type="number" value={eqParams.tStart} onChange={e => setEqParams({...eqParams, tStart: parseFloat(e.target.value)})} className="w-full bg-slate-800 border border-slate-600 rounded px-1 text-xs" />
+                                 </div>
+                                 <div>
+                                     <label className="text-[10px] text-slate-500 block">End t</label>
+                                     <input type="number" value={eqParams.tEnd} onChange={e => setEqParams({...eqParams, tEnd: parseFloat(e.target.value)})} className="w-full bg-slate-800 border border-slate-600 rounded px-1 text-xs" />
+                                 </div>
+                                 <div>
+                                     <label className="text-[10px] text-slate-500 block">Steps</label>
+                                     <input type="number" value={eqParams.steps} onChange={e => setEqParams({...eqParams, steps: parseFloat(e.target.value)})} className="w-full bg-slate-800 border border-slate-600 rounded px-1 text-xs" />
+                                 </div>
+                             </div>
+
+                             <div className="flex items-center gap-2 pt-1 border-t border-slate-700">
+                                 <input 
+                                     type="checkbox" 
+                                     id="hollowCheck" 
+                                     checked={eqParams.isHollow} 
+                                     onChange={e => setEqParams({...eqParams, isHollow: e.target.checked})}
+                                     className="rounded bg-slate-800 border-slate-600"
+                                 />
+                                 <label htmlFor="hollowCheck" className="text-xs text-amber-400">中空/容器 (Hollow)</label>
+                             </div>
+
+                             <button onClick={handleGenerateEquationBody} className="w-full bg-blue-600 hover:bg-blue-500 text-white py-1.5 rounded text-sm mt-2">生成 (Generate)</button>
+                         </div>
+                     </div>
+                 </div>
+             )}
 
              {/* Polygon Builder Hint */}
              {dragMode === 'add_poly' && (

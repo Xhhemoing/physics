@@ -1,5 +1,4 @@
 
-
 import React, { useRef, useEffect, useState, useImperativeHandle, forwardRef, useMemo } from 'react';
 import { BodyType, SimulationState, FieldType, Vector2, FieldShape, ConstraintType, PhysicsField } from '../types';
 import { Vec2 } from '../services/vectorMath';
@@ -173,19 +172,26 @@ const SimulationCanvas = forwardRef<CanvasRef, Props>(({ state, onSelectBody, on
           ctx.beginPath();
           const r = body.isParticle ? 6 / state.camera.zoom : (body.radius || 20);
           ctx.arc(0, 0, r, 0, Math.PI * 2);
-          ctx.fill(); ctx.shadowColor = 'transparent'; ctx.stroke();
-          if (!body.isParticle) {
+          if (body.isHollow) {
+              ctx.strokeStyle = body.color; ctx.lineWidth = 4/state.camera.zoom; ctx.stroke();
+          } else {
+              ctx.fill(); ctx.shadowColor = 'transparent'; ctx.stroke();
+          }
+          if (!body.isParticle && !body.isHollow) {
               ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(r * 0.8, 0);
               ctx.strokeStyle = 'rgba(0,0,0,0.3)'; ctx.lineWidth = 2 / state.camera.zoom; ctx.stroke();
           }
         } else if (body.type === BodyType.BOX) {
           const w = body.width || 40;
           const h = body.height || 40;
-          // Check if it's a Ramp/Line (height < 6)
           if (h <= 6 && body.inverseMass === 0) {
               drawHatchedLine(ctx, -w/2, 0, w/2, 0);
           } else {
-              ctx.fillRect(-w/2, -h/2, w, h); ctx.shadowColor = 'transparent'; ctx.strokeRect(-w/2, -h/2, w, h);
+              if (body.isHollow) {
+                  ctx.strokeStyle = body.color; ctx.lineWidth = 4/state.camera.zoom; ctx.strokeRect(-w/2, -h/2, w, h);
+              } else {
+                  ctx.fillRect(-w/2, -h/2, w, h); ctx.shadowColor = 'transparent'; ctx.strokeRect(-w/2, -h/2, w, h);
+              }
               if (body.surfaceSpeed && body.surfaceSpeed !== 0) {
                   const dir = Math.sign(body.surfaceSpeed);
                   ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.lineWidth = 2 / state.camera.zoom;
@@ -198,7 +204,12 @@ const SimulationCanvas = forwardRef<CanvasRef, Props>(({ state, onSelectBody, on
            if (body.vertices && body.vertices.length > 0) {
               ctx.beginPath(); ctx.moveTo(body.vertices[0].x, body.vertices[0].y);
               for (let i = 1; i < body.vertices.length; i++) ctx.lineTo(body.vertices[i].x, body.vertices[i].y);
-              ctx.closePath(); ctx.fill(); ctx.shadowColor = 'transparent'; ctx.stroke();
+              ctx.closePath();
+              if (body.isHollow) {
+                  ctx.strokeStyle = body.color; ctx.lineWidth = 4/state.camera.zoom; ctx.stroke();
+              } else {
+                   ctx.fill(); ctx.shadowColor = 'transparent'; ctx.stroke();
+              }
           }
         } else if (body.type === BodyType.ARC) {
              const r = body.radius || 100;
@@ -226,7 +237,7 @@ const SimulationCanvas = forwardRef<CanvasRef, Props>(({ state, onSelectBody, on
                      const vec = val as Vector2;
                      if (Vec2.magSq(vec) > 0.1) {
                          let color = '#fff';
-                         if (name === 'Gravity') color = '#22c55e'; if (name === 'Normal') color = '#eab308';
+                         if (name === 'Gravity') color = '#22c55e'; if (name === 'Normal' || name.includes('Normal')) color = '#eab308';
                          if (name === 'Friction') color = '#f97316'; if (name === 'Electric') color = '#f472b6';
                          if (name === 'Magnetic') color = '#3b82f6'; if (name === 'Spring') color = '#06b6d4';
                          if (name === 'Custom') color = '#d946ef'; if (name === 'Coulomb') color = '#f0abfc';
@@ -271,7 +282,27 @@ const SimulationCanvas = forwardRef<CanvasRef, Props>(({ state, onSelectBody, on
             ctx.strokeStyle = isSelected ? '#ffffff' : (c.type === ConstraintType.SPRING ? '#fbbf24' : '#94a3b8'); 
             
             if (c.type === ConstraintType.SPRING) drawSpring(ctx, pA, pB, 6 / state.camera.zoom);
-            else if (c.type === ConstraintType.ROD) { ctx.stroke(); ctx.fillStyle = '#94a3b8'; ctx.beginPath(); ctx.arc(pA.x, pA.y, 4 / state.camera.zoom, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(pB.x, pB.y, 4 / state.camera.zoom, 0, Math.PI*2); ctx.fill(); }
+            else if (c.type === ConstraintType.ROD) { 
+                ctx.stroke(); 
+                ctx.fillStyle = '#94a3b8'; ctx.beginPath(); ctx.arc(pA.x, pA.y, 4 / state.camera.zoom, 0, Math.PI*2); ctx.fill(); 
+                ctx.beginPath(); ctx.arc(pB.x, pB.y, 4 / state.camera.zoom, 0, Math.PI*2); ctx.fill(); 
+            }
+            else if (c.type === ConstraintType.ROPE) {
+                // Draw rope: if slack, maybe curved bezier? For now, straight line
+                const dist = Vec2.dist(pA, pB);
+                const slack = c.length - dist;
+                if (slack > 1) {
+                     ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 2 / state.camera.zoom;
+                     ctx.beginPath(); ctx.moveTo(pA.x, pA.y); 
+                     const mid = Vec2.div(Vec2.add(pA, pB), 2);
+                     mid.y += slack * 0.5; // Sag
+                     ctx.quadraticCurveTo(mid.x, mid.y, pB.x, pB.y);
+                     ctx.stroke();
+                } else {
+                     ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 2 / state.camera.zoom; ctx.stroke();
+                }
+                ctx.fillStyle = '#e2e8f0'; ctx.beginPath(); ctx.arc(pA.x, pA.y, 3 / state.camera.zoom, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(pB.x, pB.y, 3 / state.camera.zoom, 0, Math.PI*2); ctx.fill();
+            }
             else if (c.type === ConstraintType.PIN) { ctx.fillStyle = '#f59e0b'; ctx.beginPath(); ctx.arc(pA.x, pA.y, 6 / state.camera.zoom, 0, Math.PI*2); ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2 / state.camera.zoom; ctx.stroke(); }
         }
       });
@@ -285,6 +316,20 @@ const SimulationCanvas = forwardRef<CanvasRef, Props>(({ state, onSelectBody, on
               ctx.fillStyle = '#fbbf24'; ctx.beginPath(); ctx.arc(snappedMousePos.x, snappedMousePos.y, 4 / state.camera.zoom, 0, Math.PI*2); ctx.fill(); ctx.restore();
           }
       }
+
+      // Interactive Vector Builder Preview (Initial Velocity etc)
+      if (vectorBuilder) {
+          ctx.save();
+          // Draw arrow from body center to mouse
+          const body = state.bodies.find(b => b.id === vectorBuilder.bodyId);
+          if (body) {
+              const start = body.position;
+              const end = snappedMousePos;
+              const vec = Vec2.sub(end, start);
+              drawVector(ctx, vec, '#3b82f6', 'v', 1.0, false, start);
+          }
+          ctx.restore();
+      }
       
       // Cut Tool Preview
       if (dragMode === 'tool_cut' && cutStart) {
@@ -292,6 +337,43 @@ const SimulationCanvas = forwardRef<CanvasRef, Props>(({ state, onSelectBody, on
           ctx.strokeStyle = '#ef4444'; ctx.lineWidth = 2 / state.camera.zoom; ctx.setLineDash([5 / state.camera.zoom, 5 / state.camera.zoom]);
           ctx.beginPath(); ctx.moveTo(cutStart.x, cutStart.y); ctx.lineTo(snappedMousePos.x, snappedMousePos.y); ctx.stroke();
           ctx.fillStyle = '#ef4444'; ctx.beginPath(); ctx.arc(cutStart.x, cutStart.y, 4 / state.camera.zoom, 0, Math.PI*2); ctx.fill();
+          ctx.restore();
+      }
+      
+      // Ramp/Line Builder Preview (Fix: Missing visual)
+      if (rampCreation) {
+          ctx.save();
+          ctx.strokeStyle = '#f8fafc'; ctx.lineWidth = 2 / state.camera.zoom;
+          ctx.beginPath(); ctx.moveTo(rampCreation.start.x, rampCreation.start.y); ctx.lineTo(snappedMousePos.x, snappedMousePos.y);
+          ctx.stroke();
+          ctx.fillStyle = '#f8fafc'; 
+          ctx.beginPath(); ctx.arc(rampCreation.start.x, rampCreation.start.y, 3/state.camera.zoom, 0, Math.PI*2); ctx.fill();
+          ctx.beginPath(); ctx.arc(snappedMousePos.x, snappedMousePos.y, 3/state.camera.zoom, 0, Math.PI*2); ctx.fill();
+          ctx.restore();
+      }
+
+      // Field Builder Preview (Fix: Missing visual)
+      if (fieldBuilder) {
+          ctx.save();
+          ctx.strokeStyle = '#10b981'; ctx.lineWidth = 1.5 / state.camera.zoom; ctx.setLineDash([4/state.camera.zoom, 4/state.camera.zoom]);
+          
+          if (fieldBuilder.shape === FieldShape.BOX) {
+             const w = snappedMousePos.x - fieldBuilder.start.x; 
+             const h = snappedMousePos.y - fieldBuilder.start.y;
+             ctx.strokeRect(fieldBuilder.start.x, fieldBuilder.start.y, w, h);
+          } else if (fieldBuilder.shape === FieldShape.CIRCLE) {
+             const r = Vec2.dist(fieldBuilder.start, snappedMousePos);
+             ctx.beginPath(); ctx.arc(fieldBuilder.start.x, fieldBuilder.start.y, r, 0, Math.PI*2); ctx.stroke();
+             ctx.beginPath(); ctx.moveTo(fieldBuilder.start.x, fieldBuilder.start.y); ctx.lineTo(snappedMousePos.x, snappedMousePos.y); ctx.stroke();
+          } else if (fieldBuilder.shape === FieldShape.POLYGON && fieldBuilder.vertices) {
+             ctx.beginPath();
+             if (fieldBuilder.vertices.length > 0) {
+                 ctx.moveTo(fieldBuilder.vertices[0].x, fieldBuilder.vertices[0].y);
+                 for(let i=1; i<fieldBuilder.vertices.length; i++) ctx.lineTo(fieldBuilder.vertices[i].x, fieldBuilder.vertices[i].y);
+                 ctx.lineTo(snappedMousePos.x, snappedMousePos.y); // Current drag line
+             }
+             ctx.stroke();
+          }
           ctx.restore();
       }
 
@@ -305,7 +387,7 @@ const SimulationCanvas = forwardRef<CanvasRef, Props>(({ state, onSelectBody, on
           ctx.restore();
       }
 
-      // Arc/Ramp Logic
+      // Arc Logic
       if (arcCreation) {
           ctx.save();
           ctx.strokeStyle = '#38bdf8';
@@ -330,6 +412,19 @@ const SimulationCanvas = forwardRef<CanvasRef, Props>(({ state, onSelectBody, on
           ctx.beginPath(); ctx.arc(arcCreation.center.x, arcCreation.center.y, 4 / state.camera.zoom, 0, Math.PI*2); ctx.fill();
           ctx.restore();
       }
+
+      // Draw Snap Indicator (Crosshair at snappedMousePos)
+      ctx.save();
+      const crossSize = 5 / state.camera.zoom;
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+      ctx.lineWidth = 1 / state.camera.zoom;
+      ctx.beginPath();
+      ctx.moveTo(snappedMousePos.x - crossSize, snappedMousePos.y);
+      ctx.lineTo(snappedMousePos.x + crossSize, snappedMousePos.y);
+      ctx.moveTo(snappedMousePos.x, snappedMousePos.y - crossSize);
+      ctx.lineTo(snappedMousePos.x, snappedMousePos.y + crossSize);
+      ctx.stroke();
+      ctx.restore();
 
       ctx.restore();
     };
@@ -515,15 +610,37 @@ const SimulationCanvas = forwardRef<CanvasRef, Props>(({ state, onSelectBody, on
       ctx.strokeStyle = 'rgba(255,255,255,0.12)'; ctx.lineWidth = 1 / zoom;
       const startX = Math.floor(farLeft/gridSize)*gridSize; const endX = farLeft+w;
       const startY = Math.floor(farTop/gridSize)*gridSize; const endY = farTop+h;
+      
       ctx.beginPath();
       for(let x = startX; x < endX + gridSize; x+=gridSize) { if (Math.abs(x) < 0.001) continue; ctx.moveTo(x, farTop); ctx.lineTo(x, farTop+h); }
       for(let y = startY; y < endY + gridSize; y+=gridSize) { if (Math.abs(y) < 0.001) continue; ctx.moveTo(farLeft, y); ctx.lineTo(farLeft+w, y); }
       ctx.stroke();
+      
+      // Axes
       ctx.strokeStyle = '#94a3b8'; ctx.lineWidth = 2 / zoom; 
       ctx.beginPath(); ctx.moveTo(farLeft, 0); ctx.lineTo(farLeft+w, 0); ctx.moveTo(0, farTop); ctx.lineTo(0, farTop+h); ctx.stroke(); 
+      
       ctx.fillStyle = 'rgba(255,255,255,0.6)'; const fontSize = 10 / zoom; ctx.font = `${fontSize}px monospace`;
-      for(let x = startX; x < endX + gridSize; x+=gridSize) { if (Math.abs(x) < 0.001) continue; if (x > farLeft && x < farLeft + w) ctx.fillText((Math.round(x*100)/100).toString(), x + 2/zoom, 0 + 12/zoom); }
-      for(let y = startY; y < endY + gridSize; y+=gridSize) { if (Math.abs(y) < 0.001) continue; if (y > farTop && y < farTop + h) ctx.fillText((Math.round(-y*100)/100).toString(), 0 + 5/zoom, y - 2/zoom); }
+      
+      // Fixed Coordinates Logic
+      for(let x = startX; x < endX + gridSize; x+=gridSize) { 
+          if (Math.abs(x) < 0.001) continue;
+          // Ensure X label is visible even if Y=0 is off screen
+          let labelY = 0 + 12/zoom;
+          if (labelY < farTop + 12/zoom) labelY = farTop + 12/zoom;
+          if (labelY > farTop + h - 5/zoom) labelY = farTop + h - 5/zoom;
+          
+          ctx.fillText((Math.round(x*100)/100).toString(), x + 2/zoom, labelY); 
+      }
+      for(let y = startY; y < endY + gridSize; y+=gridSize) { 
+          if (Math.abs(y) < 0.001) continue;
+          // Ensure Y label is visible even if X=0 is off screen
+          let labelX = 0 + 5/zoom;
+          if (labelX < farLeft + 5/zoom) labelX = farLeft + 5/zoom;
+          if (labelX > farLeft + w - 20/zoom) labelX = farLeft + w - 20/zoom;
+
+          ctx.fillText((Math.round(-y*100)/100).toString(), labelX, y - 2/zoom); 
+      }
   };
 
   const drawSpring = (ctx: CanvasRenderingContext2D, p1: Vector2, p2: Vector2, width: number) => {
@@ -604,7 +721,7 @@ const SimulationCanvas = forwardRef<CanvasRef, Props>(({ state, onSelectBody, on
         return;
     }
 
-    if (dragMode.startsWith('add_') && !['add_spring', 'add_rod', 'add_pin', 'add_arc'].includes(dragMode)) {
+    if (dragMode.startsWith('add_') && !['add_spring', 'add_rod', 'add_pin', 'add_rope', 'add_arc'].includes(dragMode)) {
         onAddBody(snapped); return;
     }
     if (dragMode === 'add_arc') { onAddBody(snapped); return; }
@@ -621,7 +738,7 @@ const SimulationCanvas = forwardRef<CanvasRef, Props>(({ state, onSelectBody, on
     }
 
     if (clickedBodyId) {
-        if (['add_spring', 'add_rod', 'add_pin'].includes(dragMode)) { 
+        if (['add_spring', 'add_rod', 'add_pin', 'add_rope'].includes(dragMode)) { 
             onSelectBody(clickedBodyId); 
             return; 
         }
@@ -707,16 +824,7 @@ const SimulationCanvas = forwardRef<CanvasRef, Props>(({ state, onSelectBody, on
       }
       
       if (dragMode === 'tool_cut' && cutStart) {
-          // Pass Cut Event to App
           if (onAddBody && cutStart) {
-              // Hacky: Emit a special Cut event via onAddBody? No.
-              // App uses state inspection, but we can't trigger logic there easily without prop.
-              // We'll rely on App to handle "tool_cut" in handleSelectBody, 
-              // but here we have the line coordinates. 
-              // We need a way to pass (cutStart, snappedMousePos) to the Engine.
-              // Since I cannot change Props signature easily...
-              // I will set a window event or just fail? 
-              // Actually, I can pass a CustomEvent.
               const event = new CustomEvent('canvas-cut', { detail: { p1: cutStart, p2: snappedMousePos } });
               window.dispatchEvent(event);
           }

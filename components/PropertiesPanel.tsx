@@ -1,5 +1,6 @@
 
 
+
 import React from 'react';
 import { PhysicsBody, BodyType, PhysicsField, FieldType, Vector2, FieldShape, Constraint, ConstraintType } from '../types';
 
@@ -50,7 +51,9 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
                     <div className="flex items-center gap-2">
                         <h2 className="font-bold text-lg text-amber-400">
                             {constraint.type === ConstraintType.SPRING ? '弹簧 (Spring)' : 
-                             constraint.type === ConstraintType.ROD ? '刚性杆 (Rod)' : '销轴 (Pin Joint)'}
+                             constraint.type === ConstraintType.ROD ? '刚性杆 (Rod)' : 
+                             constraint.type === ConstraintType.ROPE ? '轻绳 (Rope)' :
+                             '销轴 (Pin Joint)'}
                         </h2>
                     </div>
                 </div>
@@ -86,7 +89,7 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
                       </>
                   )}
                   
-                  {(constraint.type === ConstraintType.SPRING || constraint.type === ConstraintType.ROD) && (
+                  {(constraint.type === ConstraintType.SPRING || constraint.type === ConstraintType.ROD || constraint.type === ConstraintType.ROPE) && (
                       <div>
                           <label className="block text-[10px] text-slate-400 mb-1 uppercase">长度 Length</label>
                           <input 

@@ -1,5 +1,4 @@
 
-
 import { BodyType, Constraint, ConstraintType, PhysicsBody, PhysicsField, FieldType, Vector2, FieldShape } from '../types';
 import { Vec2 } from './vectorMath';
 
@@ -39,7 +38,6 @@ export class PhysicsEngine {
       const isLastSubstep = i === subSteps - 1;
 
       // 0. RESET FORCES
-      // Critical Fix: Forces must be reset every substep to prevent accumulation (Gravity anomaly)
       for (const b of activeBodies) {
           if (b.inverseMass === 0) {
               b.force = {x: 0, y: 0};
@@ -53,7 +51,7 @@ export class PhysicsEngine {
           }
       }
 
-      // 1. Apply Forces (Gravity, Fields, Coulomb)
+      // 1. Apply Forces (Gravity, Fields, Coulomb, Centripetal Helper)
       this.applyForces(activeBodies, fields, globalGravity, enableCoulomb, isLastSubstep);
       
       // 2. Apply Constraint Forces (Springs - Soft Constraints)
@@ -65,7 +63,7 @@ export class PhysicsEngine {
       // 4. Resolve Collisions (Impulse-based with SAT)
       this.resolveCollisions(activeBodies, subDt, globalGravity, isLastSubstep);
       
-      // 5. Resolve Hard Constraints (Rod, Pin)
+      // 5. Resolve Hard Constraints (Rod, Pin, Rope)
       this.resolveHardConstraints(activeBodies, constraints, subDt);
 
       // 6. Integrate Position (Symplectic Euler Part 2)
@@ -107,6 +105,61 @@ export class PhysicsEngine {
   }
 
   private applyForces(bodies: PhysicsBody[], fields: PhysicsField[], gravity: Vector2, enableCoulomb: boolean, isLastSubstep: boolean) {
+    // Helper: Apply explicit Centripetal Force for bodies on Arc Tracks
+    // This stabilizes the circular motion by supplying the required turning force
+    // instead of relying solely on collision resolution impulses.
+    for (const body of bodies) {
+        if (body.inverseMass === 0) continue;
+        
+        // Scan for nearby Arcs (Naive O(N*M) but acceptable for typical scene size)
+        for (const arc of bodies) {
+            if (arc.type !== BodyType.ARC || arc.inverseMass !== 0) continue; // Only static arcs
+            
+            const rArc = arc.radius || 100;
+            const dist = Vec2.dist(body.position, arc.position);
+            
+            // If roughly on track (within small margin)
+            if (Math.abs(dist - rArc) < 5) {
+                // Check angles
+                const d = Vec2.sub(body.position, arc.position);
+                const angle = Math.atan2(d.y, d.x);
+                const start = arc.arcStartAngle || 0;
+                const end = arc.arcEndAngle || Math.PI;
+                const norm = (rad: number) => (rad % (2*Math.PI) + 2*Math.PI) % (2*Math.PI);
+                const nA = norm(angle);
+                const nStart = norm(start);
+                const nEnd = norm(end);
+                
+                let inArc = false;
+                if (nStart < nEnd) {
+                    inArc = nA >= nStart && nA <= nEnd;
+                } else {
+                    inArc = nA >= nStart || nA <= nEnd;
+                }
+
+                if (inArc) {
+                    // Apply Centripetal Force: F = m * v_t^2 / r
+                    // Radial vector (normal)
+                    const n = Vec2.normalize(d);
+                    const v = body.velocity;
+                    
+                    // Velocity tangential component
+                    const vn = Vec2.dot(v, n);
+                    const vtVec = Vec2.sub(v, Vec2.mul(n, vn));
+                    const vtSq = Vec2.magSq(vtVec);
+                    
+                    // F_c direction: Towards center (-n)
+                    // F_c magnitude: m * vt^2 / r
+                    const fcMag = (body.mass * vtSq) / rArc;
+                    const fCentripetal = Vec2.mul(n, -fcMag);
+                    
+                    body.force = Vec2.add(body.force, fCentripetal);
+                    if (isLastSubstep) this.addForceComponent(body, 'Normal (Bias)', fCentripetal);
+                }
+            }
+        }
+    }
+
     // N-Body Coulomb Interaction
     if (enableCoulomb) {
         // Reduced constant for stability
@@ -410,6 +463,21 @@ export class PhysicsEngine {
 
   // General Collision Detection Dispatcher
   private detectCollision(bodyA: PhysicsBody, bodyB: PhysicsBody): { normal: Vector2, depth: number } | null {
+      // Hollow Body Handling (Chain Collision)
+      if (bodyA.isHollow || bodyB.isHollow) {
+          const hollow = bodyA.isHollow ? bodyA : bodyB;
+          const solid = bodyA.isHollow ? bodyB : bodyA;
+          
+          const result = this.checkChainCollision(hollow, solid);
+          if (result) {
+              if (hollow === bodyB) {
+                  return { normal: Vec2.mul(result.normal, -1), depth: result.depth };
+              }
+              return result;
+          }
+          return null;
+      }
+
       // Circle vs Circle
       if (bodyA.type === BodyType.CIRCLE && bodyB.type === BodyType.CIRCLE) {
           const delta = Vec2.sub(bodyB.position, bodyA.position);
@@ -480,6 +548,73 @@ export class PhysicsEngine {
 
       return null;
   }
+
+  // --- Chain Collision Helpers ---
+  private checkChainCollision(chain: PhysicsBody, body: PhysicsBody): { normal: Vector2, depth: number } | null {
+      const chainVerts = this.getWorldVertices(chain);
+      if (chainVerts.length < 2) return null;
+
+      let maxDepth = -1;
+      let bestNormal = Vec2.zero();
+
+      // Check against all segments of the chain
+      for (let i = 0; i < chainVerts.length; i++) {
+          // If not closed, skip last segment
+          if (i === chainVerts.length - 1 && !chain.isHollow) break; 
+          // For hollow bodies, we usually assume closed loop for "container" logic,
+          // but "Chain" usually implies line strip.
+          // Let's assume loop if first point == last point, else strip.
+          const v1 = chainVerts[i];
+          const v2 = chainVerts[(i + 1) % chainVerts.length];
+
+          // Treat each edge as a "capsule" segment with radius 0 (or small thickness)
+          const thickness = 2; // Slight thickness to catch fast objects
+
+          if (body.type === BodyType.CIRCLE) {
+              const res = this.checkCircleSegment(body.position, body.radius || 10, v1, v2, thickness);
+              if (res && res.depth > maxDepth) {
+                  maxDepth = res.depth;
+                  bestNormal = res.normal;
+              }
+          } else {
+               // For polygons, check all vertices against this segment
+               const polyVerts = this.getWorldVertices(body);
+               for(const pv of polyVerts) {
+                   const res = this.checkCircleSegment(pv, 0, v1, v2, thickness);
+                   if (res && res.depth > maxDepth) {
+                       maxDepth = res.depth;
+                       bestNormal = res.normal;
+                   }
+               }
+          }
+      }
+
+      if (maxDepth > 0) {
+          return { normal: bestNormal, depth: maxDepth };
+      }
+      return null;
+  }
+
+  private checkCircleSegment(center: Vector2, radius: number, v1: Vector2, v2: Vector2, thickness: number): { normal: Vector2, depth: number } | null {
+      const segment = Vec2.sub(v2, v1);
+      const lenSq = Vec2.magSq(segment);
+      let t = 0;
+      if (lenSq > 0) {
+          t = Vec2.dot(Vec2.sub(center, v1), segment) / lenSq;
+          t = Math.max(0, Math.min(1, t));
+      }
+      
+      const closest = Vec2.add(v1, Vec2.mul(segment, t));
+      const distVec = Vec2.sub(center, closest);
+      const dist = Vec2.mag(distVec);
+
+      if (dist < radius + thickness) {
+          const normal = dist > 0 ? Vec2.normalize(distVec) : Vec2.perp(Vec2.normalize(segment));
+          return { normal, depth: (radius + thickness) - dist };
+      }
+      return null;
+  }
+
 
   // --- SAT HELPERS ---
   
@@ -659,9 +794,6 @@ export class PhysicsEngine {
       const d = Vec2.sub(circle.position, arc.position);
       const dist = Vec2.mag(d);
       
-      // Fix: Treat as thin wire (one-sided or two-sided, we assume track style - inside or outside matters)
-      // If we are ON the arc, distance to center is approx rArc.
-      // Thickness is effectively 0 for logic, but we need detection tolerance.
       const tolerance = rCirc + 10;
       
       if (Math.abs(dist - rArc) < tolerance) {
@@ -684,29 +816,15 @@ export class PhysicsEngine {
           if (inArc) {
               const normal = Vec2.normalize(d); 
               let depth = 0;
-
-              // If inside the arc (dist < rArc), push IN towards center (normal -) if closer to band
-              // If outside (dist > rArc), push OUT (normal +)
               
               if (dist < rArc) {
                   // Inside
-                  depth = (rArc - dist) - rCirc; // overlap
-                  // If depth is positive (we are too deep), we need to push back?
-                  // Actually standard collision: overlap = (r_a + r_b) - dist.
-                  // Here, it's a wire. 
-                  // dist + rCirc > rArc -> overlap.
-                  // penetration = (dist + rCirc) - rArc.
                   const penetration = (dist + rCirc) - rArc;
                   if (penetration > 0) {
                       return { normal: Vec2.mul(normal, -1), depth: penetration };
                   }
               } else {
                   // Outside
-                  // dist - rCirc < rArc -> overlap.
-                  const penetration = rArc - (dist - rCirc); // Wait.
-                  // Outside means dist > rArc.
-                  // Touch if dist - rCirc < rArc.
-                  // penetration = rCirc - (dist - rArc).
                   const p = rCirc - (dist - rArc);
                   if (p > 0) {
                       return { normal: normal, depth: p };
@@ -750,11 +868,6 @@ export class PhysicsEngine {
                   let depth = 0;
                   
                   if (dist < rArc) {
-                      // Inside, push inwards (towards center? no, away from arc line)
-                      // Arc line is at rArc. v is at dist.
-                      // depth = dist - (rArc - epsilon)? No.
-                      // Penetration into the wall.
-                      // Assuming thin wall.
                       depth = 5 - (rArc - dist); // Arbitrary thickness 5
                       if (depth > 0) {
                           n = Vec2.mul(n, -1); // Push towards center
@@ -790,40 +903,59 @@ export class PhysicsEngine {
         const pA = Vec2.add(bodyA.position, rA);
         const pB = Vec2.add(bodyB.position, rB);
 
-        if (c.type === ConstraintType.ROD) {
+        // --- ROD (Exact Distance) OR ROPE (Max Distance) ---
+        if (c.type === ConstraintType.ROD || c.type === ConstraintType.ROPE) {
             const delta = Vec2.sub(pB, pA);
             const dist = Vec2.mag(delta);
-            const diff = (dist - c.length);
+            let diff = 0;
+
+            if (c.type === ConstraintType.ROD) {
+                diff = dist - c.length;
+            } else if (c.type === ConstraintType.ROPE) {
+                // Only constraint if distance > length (slack)
+                if (dist > c.length) {
+                    diff = dist - c.length;
+                } else {
+                    continue; // Slack, do nothing
+                }
+            }
             
             if (Math.abs(diff) > 0.001) {
-                const normal = Vec2.normalize(delta);
+                const normal = dist === 0 ? {x:0, y:1} : Vec2.normalize(delta);
                 const correction = diff * 0.5; 
                 const move = Vec2.mul(normal, correction);
 
                 if (bodyA.inverseMass !== 0) bodyA.position = Vec2.add(bodyA.position, move);
                 if (bodyB.inverseMass !== 0) bodyB.position = Vec2.sub(bodyB.position, move);
 
+                // Impulse correction
                 const vA = Vec2.add(bodyA.velocity, Vec2.crossNV(bodyA.angularVelocity, rA));
                 const vB = Vec2.add(bodyB.velocity, Vec2.crossNV(bodyB.angularVelocity, rB));
                 const relVel = Vec2.sub(vB, vA);
                 const vn = Vec2.dot(relVel, normal);
                 
-                const rnA = Vec2.cross(rA, normal);
-                const rnB = Vec2.cross(rB, normal);
-                const k = bodyA.inverseMass + bodyB.inverseMass + 
-                          (rnA * rnA * bodyA.inverseInertia) + 
-                          (rnB * rnB * bodyB.inverseInertia);
-                
-                const lambda = -vn / k;
-                const P = Vec2.mul(normal, lambda);
+                // If it's a rope and we are moving towards each other (slackening), don't bounce back
+                // But generally we want to kill velocity moving OUT of the constraint
+                if (c.type === ConstraintType.ROPE && vn < 0) {
+                   // Moving inwards is fine for rope
+                } else {
+                    const rnA = Vec2.cross(rA, normal);
+                    const rnB = Vec2.cross(rB, normal);
+                    const k = bodyA.inverseMass + bodyB.inverseMass + 
+                              (rnA * rnA * bodyA.inverseInertia) + 
+                              (rnB * rnB * bodyB.inverseInertia);
+                    
+                    const lambda = -vn / k;
+                    const P = Vec2.mul(normal, lambda);
 
-                if (bodyA.inverseMass !== 0) {
-                    bodyA.velocity = Vec2.sub(bodyA.velocity, Vec2.mul(P, bodyA.inverseMass));
-                    bodyA.angularVelocity -= rnA * lambda * bodyA.inverseInertia;
-                }
-                if (bodyB.inverseMass !== 0) {
-                    bodyB.velocity = Vec2.add(bodyB.velocity, Vec2.mul(P, bodyB.inverseMass));
-                    bodyB.angularVelocity += rnB * lambda * bodyB.inverseInertia;
+                    if (bodyA.inverseMass !== 0) {
+                        bodyA.velocity = Vec2.sub(bodyA.velocity, Vec2.mul(P, bodyA.inverseMass));
+                        bodyA.angularVelocity -= rnA * lambda * bodyA.inverseInertia;
+                    }
+                    if (bodyB.inverseMass !== 0) {
+                        bodyB.velocity = Vec2.add(bodyB.velocity, Vec2.mul(P, bodyB.inverseMass));
+                        bodyB.angularVelocity += rnB * lambda * bodyB.inverseInertia;
+                    }
                 }
             }
         } else if (c.type === ConstraintType.PIN) {
