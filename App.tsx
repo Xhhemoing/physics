@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Play, Pause, RotateCcw, MousePointer2, Camera, Download, Link, Eclipse, MoveRight, Upload, Zap, Activity, Minus, Plus, Scan, Crosshair, ChevronDown, ChevronRight, Globe, Layers, Settings, Clock, Timer, Trash2, Scissors, Group, Combine, Pentagon, Calculator, X } from 'lucide-react';
 import SimulationCanvas, { CanvasRef } from './components/SimulationCanvas';
@@ -17,6 +16,8 @@ const INITIAL_STATE: SimulationState = {
   paused: true,
   gravity: { x: 0, y: 10 },
   enableCoulomb: false,
+  enableUniversalGravity: false,
+  enableAirResistance: false, // Default to false for space-like behavior
   selectedBodyId: null,
   selectedFieldId: null,
   selectedConstraintId: null,
@@ -28,6 +29,7 @@ interface ArcBuilder {
     center: Vector2;
     radius: number;
     startAngle: number;
+    endAngle: number;
 }
 
 interface RampBuilder {
@@ -50,16 +52,16 @@ const CollapsibleGroup = ({ icon, label, children, defaultOpen = false }: { icon
         <div className="w-full px-1 mb-1">
             <button 
                 onClick={() => setIsOpen(!isOpen)}
-                className="flex items-center justify-between w-full p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded text-[10px] font-bold uppercase tracking-wider"
+                className={`flex items-center justify-between w-full p-2 rounded text-[10px] font-bold uppercase tracking-wider transition-colors ${isOpen ? 'bg-slate-800 text-slate-200' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'}`}
             >
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-2">
                     {icon}
                     <span>{label}</span>
                 </div>
                 {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
             </button>
             <div className={`overflow-hidden transition-all duration-300 ${isOpen ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'}`}>
-                <div className="flex flex-col gap-1 p-1 bg-slate-800/30 rounded mt-1">
+                <div className="flex flex-col gap-1 p-1 mt-1 border-l border-slate-700 ml-2 pl-2">
                     {children}
                 </div>
             </div>
@@ -99,7 +101,7 @@ const App: React.FC = () => {
   
   // Equation Builder State
   const [showEquationBuilder, setShowEquationBuilder] = useState(false);
-  const [eqParams, setEqParams] = useState({ x: "100 * Math.cos(t)", y: "100 * Math.sin(t)", tStart: 0, tEnd: 6.28, steps: 50, isHollow: false });
+  const [eqParams, setEqParams] = useState({ x: "100 * Math.cos(t)", y: "100 * Math.sin(t)", tStart: 0, tEnd: 6.28, steps: 100, isHollow: true });
 
   const engineRef = useRef(new PhysicsEngine());
   const canvasRef = useRef<CanvasRef>(null);
@@ -115,14 +117,25 @@ const App: React.FC = () => {
 
     if (!state.paused) {
       setState(prev => {
-        const newBodies = engineRef.current.step(dt, prev.bodies, prev.constraints, prev.fields, prev.gravity, prev.enableCoulomb);
+        const newBodies = engineRef.current.step(
+            dt, 
+            prev.bodies, 
+            prev.constraints, 
+            prev.fields, 
+            prev.gravity, 
+            prev.enableCoulomb,
+            prev.enableUniversalGravity,
+            prev.enableAirResistance
+        );
         
-        // Update Trails
+        // Update Trails with distance logic for smoothness
         newBodies.forEach(b => {
             if (b.showTrajectory) {
                 if (!b.trail) b.trail = [];
                 const last = b.trail[b.trail.length - 1];
-                if (!last || Vec2.dist(last, b.position) > 2) {
+                // Only add point if moved significantly (smoother curves, less memory)
+                // Threshold squared: 2*2 = 4
+                if (!last || Vec2.magSq(Vec2.sub(last, b.position)) > 4) {
                     b.trail.push({ ...b.position });
                     if (b.trail.length > 500) b.trail.shift();
                 }
@@ -420,16 +433,20 @@ const App: React.FC = () => {
 
     if (dragMode === 'add_arc') {
         if (!arcBuilder) {
-            setArcBuilder({ phase: 1, center: pos, radius: 0, startAngle: 0 });
+            setArcBuilder({ phase: 1, center: pos, radius: 0, startAngle: 0, endAngle: 0 });
         } else if (arcBuilder.phase === 1) {
             const r = Vec2.dist(arcBuilder.center, pos);
             const angle = Math.atan2(pos.y - arcBuilder.center.y, pos.x - arcBuilder.center.x);
-            setArcBuilder({ ...arcBuilder, phase: 2, radius: r, startAngle: angle });
+            setArcBuilder({ ...arcBuilder, phase: 2, radius: r, startAngle: angle, endAngle: 0 });
         } else if (arcBuilder.phase === 2) {
+             const angle = Math.atan2(pos.y - arcBuilder.center.y, pos.x - arcBuilder.center.x);
+             const r = Vec2.dist(arcBuilder.center, pos);
+             setArcBuilder({ ...arcBuilder, phase: 3, radius: r, startAngle: angle, endAngle: 0 });
+        } else if (arcBuilder.phase === 3) {
             let endAngle = Math.atan2(pos.y - arcBuilder.center.y, pos.x - arcBuilder.center.x);
             const startPoint = { x: arcBuilder.center.x + Math.cos(arcBuilder.startAngle)*arcBuilder.radius, y: arcBuilder.center.y + Math.sin(arcBuilder.startAngle)*arcBuilder.radius };
-            let start = arcBuilder.startAngle; let end = endAngle;
-            if (Vec2.dist(pos, startPoint) < 20) { start = 0; end = 2 * Math.PI; }
+            if (Vec2.dist(pos, startPoint) < 20) { endAngle = arcBuilder.startAngle + 2 * Math.PI - 0.01; } 
+            
             const newBody: PhysicsBody = {
                 id: `arc_${Date.now()}`,
                 type: BodyType.ARC,
@@ -437,7 +454,7 @@ const App: React.FC = () => {
                 velocity: {x:0, y:0}, acceleration: {x:0, y:0}, force: {x:0, y:0}, constantForce: {x:0, y:0},
                 mass: 0, inverseMass: 0, restitution: 1.0, friction: 0.5, charge: 0,
                 angle: 0, angularVelocity: 0, momentInertia: 0, inverseInertia: 0,
-                radius: arcBuilder.radius, arcStartAngle: start, arcEndAngle: end,
+                radius: arcBuilder.radius, arcStartAngle: arcBuilder.startAngle, arcEndAngle: endAngle,
                 color: '#e2e8f0', selected: true, showTrajectory: false, trail: [], showCharge: true
             };
             setState(s => ({ ...s, bodies: [...s.bodies, newBody], selectedBodyId: newBody.id }));
@@ -542,7 +559,12 @@ const App: React.FC = () => {
   };
 
   const setPreset = (type: 'smooth' | 'elastic') => {
-      setState(s => ({ ...s, bodies: s.bodies.map(b => { if (b.inverseMass === 0) return b; if (type === 'smooth') return { ...b, friction: 0 }; if (type === 'elastic') return { ...b, restitution: 1.0 }; return b; }) }));
+      setState(s => ({ ...s, bodies: s.bodies.map(b => { 
+          // Do not skip static bodies (inverseMass == 0) so we can smooth tracks/ramps too
+          if (type === 'smooth') return { ...b, friction: 0 }; 
+          if (type === 'elastic') return { ...b, restitution: 1.0 }; 
+          return b; 
+      }) }));
   };
 
   const clearAll = () => {
@@ -566,7 +588,7 @@ const App: React.FC = () => {
           // Localize
           const localVerts = points.map(p => ({ x: p.x - center.x, y: p.y - center.y }));
 
-          // Determine Mass (Static if hollow)
+          // Determine Mass (Static if hollow/chain)
           const mass = eqParams.isHollow ? 0 : 5;
           const invMass = mass === 0 ? 0 : 1/mass;
 
@@ -579,6 +601,8 @@ const App: React.FC = () => {
              angle: 0, angularVelocity: 0, momentInertia: 100, inverseInertia: 0.01,
              vertices: localVerts, color: eqParams.isHollow ? '#f59e0b' : '#14b8a6', 
              selected: true, showTrajectory: false, trail: [],
+             // Important: Equation shapes often act as tracks or containers, so we use hollow/chain mode
+             // This prevents Convex Hull logic from creating "invisible walls" across concave sections.
              isHollow: eqParams.isHollow
           };
           setState(s => ({ ...s, bodies: [...s.bodies, newBody], selectedBodyId: newBody.id }));
@@ -634,7 +658,7 @@ const App: React.FC = () => {
              <div className="h-6 w-px bg-slate-700 mx-2" />
 
              <div className="flex space-x-2 text-xs">
-                 <button onClick={() => setPreset('smooth')} className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded transition">光滑模式</button>
+                 <button onClick={() => setPreset('smooth')} className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded transition" title="将所有物体（包括轨道）摩擦力设为0">一键光滑</button>
                  <button onClick={() => setPreset('elastic')} className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded transition">完全弹性</button>
                  <button onClick={clearAll} className="px-3 py-1.5 bg-red-900/30 hover:bg-red-900/50 text-red-300 rounded transition">清空</button>
              </div>
@@ -658,21 +682,21 @@ const App: React.FC = () => {
       <div className="flex-1 flex overflow-hidden relative">
           
           {/* Left Toolbar */}
-          <aside className="w-16 bg-slate-900 border-r border-slate-800 flex flex-col py-2 overflow-y-auto no-scrollbar select-none z-10">
+          <aside className="w-20 bg-slate-900 border-r border-slate-800 flex flex-col py-2 overflow-y-auto no-scrollbar select-none z-10 items-center">
               
-              <div className="flex flex-col items-center gap-1 mb-2">
+              <div className="flex flex-col items-center gap-1 mb-2 w-full px-1">
                  <button 
                       onClick={() => setDragMode('select')}
-                      className={`p-2 rounded-lg transition ${dragMode === 'select' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
+                      className={`p-2 w-full rounded-lg transition flex flex-col items-center ${dragMode === 'select' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
                       title="选择 (Select)"
                   >
                       <MousePointer2 size={20} />
-                      <span className="text-[9px] block text-center mt-0.5">选择</span>
+                      <span className="text-[9px] mt-1">选择</span>
                   </button>
               </div>
 
               {/* Group: Shapes */}
-              <CollapsibleGroup icon={<SquareIcon />} label="形状">
+              <CollapsibleGroup icon={<SquareIcon />} label="形状" defaultOpen={true}>
                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_circle" icon={<CircleIcon />} label="圆形" />
                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_box" icon={<SquareIcon />} label="矩形" />
                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_particle" icon={<ParticleIcon />} label="质点" />
@@ -751,7 +775,9 @@ const App: React.FC = () => {
                 dragMode={dragMode}
                 onZoom={handleZoom}
                 onPauseToggle={(p) => setState(s => ({...s, paused: p}))}
-                arcCreation={arcBuilder ? { ...arcBuilder, endAngle: 0 } : null}
+                // When passing arcCreation to Canvas, ensure it has necessary data for rendering
+                // App manages the phase logic, Canvas just renders what is given
+                arcCreation={arcBuilder} 
                 rampCreation={rampBuilder}
                 constraintBuilder={constraintBuilder}
              />
@@ -796,7 +822,10 @@ const App: React.FC = () => {
                                      onChange={e => setEqParams({...eqParams, isHollow: e.target.checked})}
                                      className="rounded bg-slate-800 border-slate-600"
                                  />
-                                 <label htmlFor="hollowCheck" className="text-xs text-amber-400">中空/容器 (Hollow)</label>
+                                 <label htmlFor="hollowCheck" className="text-xs text-amber-400 flex flex-col">
+                                     <span>链式结构 / 中空 (Chain/Hollow)</span>
+                                     <span className="text-[9px] text-slate-500">推荐开启。关闭后将生成实心凸多边形，可能导致"空气墙"。</span>
+                                 </label>
                              </div>
 
                              <button onClick={handleGenerateEquationBody} className="w-full bg-blue-600 hover:bg-blue-500 text-white py-1.5 rounded text-sm mt-2">生成 (Generate)</button>
@@ -837,7 +866,7 @@ const App: React.FC = () => {
                  {/* Hints */}
                  {arcBuilder && (
                      <p className="text-blue-400 font-bold mt-1 border-t border-slate-700 pt-1">
-                         {arcBuilder.phase === 1 ? '步骤 1: 点击圆心' : arcBuilder.phase === 2 ? '步骤 2: 点击起点' : '步骤 3: 点击终点'}
+                         {arcBuilder.phase === 1 ? '步骤 1: 点击圆心' : arcBuilder.phase === 2 ? '步骤 2: 点击起点(定义半径)' : '步骤 3: 点击终点'}
                      </p>
                  )}
                  {constraintBuilder && (
@@ -912,8 +941,8 @@ const App: React.FC = () => {
                          </div>
 
                          <div>
-                             <div className="flex items-center justify-between">
-                                 <label className="text-[10px] text-slate-400 uppercase block">库仑力 Coulomb Interaction</label>
+                             <div className="flex items-center justify-between mb-2">
+                                 <label className="text-[10px] text-slate-400 uppercase block">库仑力 Coulomb</label>
                                  <input 
                                     type="checkbox" 
                                     checked={state.enableCoulomb} 
@@ -921,7 +950,26 @@ const App: React.FC = () => {
                                     className="rounded border-slate-600 bg-slate-800"
                                  />
                              </div>
-                             <p className="text-[9px] text-slate-500 mt-1">开启后所有带电体之间将产生相互作用力 (N-body, O(N^2)).</p>
+
+                             <div className="flex items-center justify-between mb-2">
+                                 <label className="text-[10px] text-slate-400 uppercase block">万有引力 Universal Gravity</label>
+                                 <input 
+                                    type="checkbox" 
+                                    checked={state.enableUniversalGravity} 
+                                    onChange={(e) => setState(s => ({...s, enableUniversalGravity: e.target.checked}))}
+                                    className="rounded border-slate-600 bg-slate-800"
+                                 />
+                             </div>
+                             
+                             <div className="flex items-center justify-between">
+                                 <label className="text-[10px] text-slate-400 uppercase block">空气阻力 Air Resistance</label>
+                                 <input 
+                                    type="checkbox" 
+                                    checked={state.enableAirResistance} 
+                                    onChange={(e) => setState(s => ({...s, enableAirResistance: e.target.checked}))}
+                                    className="rounded border-slate-600 bg-slate-800"
+                                 />
+                             </div>
                          </div>
                      </div>
                  </div>

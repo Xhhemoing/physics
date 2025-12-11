@@ -1,4 +1,5 @@
 
+
 // Fundamental Vector Type
 export interface Vector2 {
   x: number;
@@ -135,7 +136,9 @@ export interface SimulationState {
   time: number;
   paused: boolean;
   gravity: Vector2;
-  enableCoulomb: boolean; // New: Global switch for N-body interaction
+  enableCoulomb: boolean; // Global switch for Coulomb
+  enableUniversalGravity: boolean; // Global switch for G*m1*m2/r^2
+  enableAirResistance: boolean; // Global switch for Drag
   selectedBodyId: string | null;
   selectedFieldId: string | null;
   selectedConstraintId: string | null;

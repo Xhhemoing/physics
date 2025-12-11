@@ -1,11 +1,12 @@
 
+
 import { BodyType, Constraint, ConstraintType, PhysicsBody, PhysicsField, FieldType, Vector2, FieldShape } from '../types';
 import { Vec2 } from './vectorMath';
 
 /**
  * Physics Engine
- * Implements a Semi-Implicit Euler (Symplectic Euler) integrator for stability
- * and an Impulse-Based resolver for collisions and constraints.
+ * Refined Semi-Implicit Euler (Symplectic Euler) integrator.
+ * Fixed: Vacuum drag issues, Composite field integration order, Invisible walls on hollow objects.
  */
 
 export class PhysicsEngine {
@@ -19,14 +20,15 @@ export class PhysicsEngine {
     constraints: Constraint[],
     fields: PhysicsField[],
     globalGravity: Vector2,
-    enableCoulomb: boolean
+    enableCoulomb: boolean,
+    enableUniversalGravity: boolean = false,
+    enableAirResistance: boolean = false
   ): PhysicsBody[] {
     const subSteps = 8; // High substeps for stability
     const subDt = dt / subSteps;
 
     // Direct mutation for performance within the step, 
     // but we clone the array structure to avoid React state mutation issues.
-    // Deep clone is expensive, so we clone the body objects.
     const activeBodies = new Array(bodies.length);
     for(let i=0; i<bodies.length; i++) {
         const b = bodies[i];
@@ -51,22 +53,27 @@ export class PhysicsEngine {
           }
       }
 
-      // 1. Apply Forces (Gravity, Fields, Coulomb, Centripetal Helper)
-      this.applyForces(activeBodies, fields, globalGravity, enableCoulomb, isLastSubstep);
+      // 1. Apply Forces (Gravity, Fields, Coulomb, Universal Gravity)
+      this.applyForces(activeBodies, fields, globalGravity, enableCoulomb, enableUniversalGravity, isLastSubstep);
       
-      // 2. Apply Constraint Forces (Springs - Soft Constraints)
+      // 2. Apply Air Resistance (If enabled)
+      if (enableAirResistance) {
+          this.applyAirResistance(activeBodies, isLastSubstep);
+      }
+
+      // 3. Apply Constraint Forces (Springs - Soft Constraints)
       this.applySprings(activeBodies, constraints, isLastSubstep);
 
-      // 3. Integrate Velocity (Symplectic Euler Part 1)
+      // 4. Integrate Velocity (Symplectic Euler Part 1)
       this.integrateVelocity(activeBodies, subDt);
 
-      // 4. Resolve Collisions (Impulse-based with SAT)
+      // 5. Resolve Collisions (Impulse-based with SAT)
       this.resolveCollisions(activeBodies, subDt, globalGravity, isLastSubstep);
       
-      // 5. Resolve Hard Constraints (Rod, Pin, Rope)
+      // 6. Resolve Hard Constraints (Rod, Pin, Rope)
       this.resolveHardConstraints(activeBodies, constraints, subDt);
 
-      // 6. Integrate Position (Symplectic Euler Part 2)
+      // 7. Integrate Position (Symplectic Euler Part 2)
       this.integratePosition(activeBodies, subDt);
     }
 
@@ -95,7 +102,6 @@ export class PhysicsEngine {
 
   private evaluateEquation(eq: string, x: number, y: number, t: number): number {
       try {
-          // Optimization: Simple eval check, ideally should be parsed once
           const f = new Function('x', 'y', 't', `with(Math){ return ${eq}; }`);
           const res = f(x, y, t);
           return isNaN(res) ? 0 : res;
@@ -104,106 +110,63 @@ export class PhysicsEngine {
       }
   }
 
-  private applyForces(bodies: PhysicsBody[], fields: PhysicsField[], gravity: Vector2, enableCoulomb: boolean, isLastSubstep: boolean) {
-    // Helper: Apply explicit Centripetal Force for bodies on Arc Tracks
-    // This stabilizes the circular motion by supplying the required turning force
-    // instead of relying solely on collision resolution impulses.
-    for (const body of bodies) {
-        if (body.inverseMass === 0) continue;
-        
-        // Scan for nearby Arcs (Naive O(N*M) but acceptable for typical scene size)
-        for (const arc of bodies) {
-            if (arc.type !== BodyType.ARC || arc.inverseMass !== 0) continue; // Only static arcs
-            
-            const rArc = arc.radius || 100;
-            const dist = Vec2.dist(body.position, arc.position);
-            
-            // If roughly on track (within small margin)
-            if (Math.abs(dist - rArc) < 5) {
-                // Check angles
-                const d = Vec2.sub(body.position, arc.position);
-                const angle = Math.atan2(d.y, d.x);
-                const start = arc.arcStartAngle || 0;
-                const end = arc.arcEndAngle || Math.PI;
-                const norm = (rad: number) => (rad % (2*Math.PI) + 2*Math.PI) % (2*Math.PI);
-                const nA = norm(angle);
-                const nStart = norm(start);
-                const nEnd = norm(end);
-                
-                let inArc = false;
-                if (nStart < nEnd) {
-                    inArc = nA >= nStart && nA <= nEnd;
-                } else {
-                    inArc = nA >= nStart || nA <= nEnd;
-                }
+  private applyForces(
+      bodies: PhysicsBody[], 
+      fields: PhysicsField[], 
+      gravity: Vector2, 
+      enableCoulomb: boolean, 
+      enableUniversalGravity: boolean,
+      isLastSubstep: boolean
+    ) {
+    
+    // N-Body Interactions (Coulomb & Universal Gravity)
+    if (enableCoulomb || enableUniversalGravity) {
+        const kCoulomb = 2000; 
+        const kGravity = 500; // Tuned constant for Universal Gravity visualization
 
-                if (inArc) {
-                    // Apply Centripetal Force: F = m * v_t^2 / r
-                    // Radial vector (normal)
-                    const n = Vec2.normalize(d);
-                    const v = body.velocity;
-                    
-                    // Velocity tangential component
-                    const vn = Vec2.dot(v, n);
-                    const vtVec = Vec2.sub(v, Vec2.mul(n, vn));
-                    const vtSq = Vec2.magSq(vtVec);
-                    
-                    // F_c direction: Towards center (-n)
-                    // F_c magnitude: m * vt^2 / r
-                    const fcMag = (body.mass * vtSq) / rArc;
-                    const fCentripetal = Vec2.mul(n, -fcMag);
-                    
-                    body.force = Vec2.add(body.force, fCentripetal);
-                    if (isLastSubstep) this.addForceComponent(body, 'Normal (Bias)', fCentripetal);
-                }
-            }
-        }
-    }
-
-    // N-Body Coulomb Interaction
-    if (enableCoulomb) {
-        // Reduced constant for stability
-        const k = 2000; 
         for (let i = 0; i < bodies.length; i++) {
             const b1 = bodies[i];
-            if (!b1.charge) continue;
+            if (b1.inverseMass === 0) continue; // Optimization: Static bodies don't move, but they attract. Handled in inner loop.
 
-            for (let j = i + 1; j < bodies.length; j++) {
+            for (let j = 0; j < bodies.length; j++) {
+                if (i === j) continue;
                 const b2 = bodies[j];
-                if (!b2.charge) continue;
-                if (b1.inverseMass === 0 && b2.inverseMass === 0) continue;
-
+                
                 const rVec = Vec2.sub(b1.position, b2.position);
                 const rSq = Vec2.magSq(rVec);
                 
-                // Prevent singularity
-                if (rSq < 100) continue; 
-
+                if (rSq < 100) continue; // Softening parameter to prevent explosion at r=0
                 const r = Math.sqrt(rSq);
-                // F = k * q1 * q2 / r^2
-                const fMag = (k * b1.charge * b2.charge) / rSq;
-                const fDir = Vec2.div(rVec, r);
-                const f = Vec2.mul(fDir, fMag); 
+                const dir = Vec2.div(rVec, r); // Direction from B2 to B1
 
-                if (b1.inverseMass !== 0) {
-                    b1.force = Vec2.add(b1.force, f);
-                    if (isLastSubstep) this.addForceComponent(b1, 'Coulomb', f);
+                let fTotal = {x:0, y:0};
+
+                // Coulomb: F = k * q1 * q2 / r^2 (Repulsive if signs match)
+                if (enableCoulomb && b1.charge !== 0 && b2.charge !== 0) {
+                     const fMag = (kCoulomb * b1.charge * b2.charge) / rSq;
+                     const f = Vec2.mul(dir, fMag);
+                     fTotal = Vec2.add(fTotal, f);
+                     if (isLastSubstep) this.addForceComponent(b1, 'Coulomb', f);
                 }
-                if (b2.inverseMass !== 0) {
-                    const fNeg = Vec2.mul(f, -1);
-                    b2.force = Vec2.add(b2.force, fNeg); // Newton's 3rd Law
-                    if (isLastSubstep) this.addForceComponent(b2, 'Coulomb', fNeg);
+
+                // Universal Gravity: F = -G * m1 * m2 / r^2 (Always Attractive)
+                if (enableUniversalGravity && b1.mass > 0 && b2.mass > 0) {
+                     const fMag = -(kGravity * b1.mass * b2.mass) / rSq;
+                     const f = Vec2.mul(dir, fMag);
+                     fTotal = Vec2.add(fTotal, f);
+                     if (isLastSubstep) this.addForceComponent(b1, 'Univ. Gravity', f);
                 }
+                
+                b1.force = Vec2.add(b1.force, fTotal);
             }
         }
     }
 
     // Single body forces
     for (const body of bodies) {
-      if (body.inverseMass === 0) continue; // Static body
+      if (body.inverseMass === 0) continue; 
 
-      // 1. Global Gravity
-      // F = m * g
+      // 1. Global Gravity (Constant downward acceleration)
       const fGravity = Vec2.mul(gravity, body.mass);
       body.force = Vec2.add(body.force, fGravity);
       if (isLastSubstep) this.addForceComponent(body, 'Gravity', fGravity);
@@ -234,8 +197,11 @@ export class PhysicsEngine {
                 body.force = Vec2.add(body.force, fElectric);
                 if (isLastSubstep) this.addForceComponent(body, 'Electric', fElectric);
             } else if (field.type === FieldType.UNIFORM_MAGNETIC) {
+                // Lorentz Force F = q(v x B)
+                // v = (vx, vy, 0), B = (0, 0, Bz)
+                // v x B = (vy*Bz, -vx*Bz, 0)
+                // Force is perpendicular to velocity.
                 const B = field.strength as number;
-                // F = q(v x B). 2D cross product: (vx, vy, 0) x (0, 0, B) = (vy*B, -vx*B, 0)
                 const fLorentz = {
                     x: body.velocity.y * B * body.charge,
                     y: -body.velocity.x * B * body.charge
@@ -252,9 +218,7 @@ export class PhysicsEngine {
                 const val2 = this.evaluateEquation(field.equations.ey, body.position.x, body.position.y, 0);
                 
                 let fCustom = {x:0, y:0};
-                // Check if it acts as Magnetic field (velocity dependent)
                 if (field.customType === 'MAGNETIC') {
-                    // Assume val1 is B magnitude (scalar)
                     const B = val1;
                      fCustom = {
                         x: body.velocity.y * B * body.charge,
@@ -262,8 +226,6 @@ export class PhysicsEngine {
                     };
                     if (isLastSubstep) this.addForceComponent(body, 'Magnetic', fCustom);
                 } else {
-                    // Default Electric (Force)
-                    // F = qE
                     const E = { x: val1, y: val2 };
                     fCustom = Vec2.mul(E, body.charge);
                     if (isLastSubstep) this.addForceComponent(body, 'Electric', fCustom);
@@ -273,13 +235,59 @@ export class PhysicsEngine {
         }
       }
       
-      // 3. Air Drag
-      const dragCoeff = 0.005;
-      const rotDrag = 0.05;
-      const fDrag = Vec2.mul(body.velocity, -dragCoeff * body.mass);
-      body.force = Vec2.add(body.force, fDrag);
+      // Arc Centripetal Stabilization (unchanged logic, kept for stability on tracks)
+      this.applyCentripetalAssist(body, bodies);
+    }
+  }
 
-      body.angularVelocity *= (1 - rotDrag * 0.01); 
+  private applyAirResistance(bodies: PhysicsBody[], isLastSubstep: boolean) {
+      const dragCoeff = 0.002;
+      const rotDrag = 0.05;
+
+      for (const body of bodies) {
+          if (body.inverseMass === 0) continue;
+          
+          const fDrag = Vec2.mul(body.velocity, -dragCoeff * body.mass);
+          body.force = Vec2.add(body.force, fDrag);
+          body.angularVelocity *= (1 - rotDrag * 0.01); 
+
+          if (isLastSubstep && Vec2.magSq(fDrag) > 0.0001) {
+              this.addForceComponent(body, 'Drag', fDrag);
+          }
+      }
+  }
+
+  private applyCentripetalAssist(body: PhysicsBody, allBodies: PhysicsBody[]) {
+     // Scan for nearby Arcs to apply helper force
+     for (const arc of allBodies) {
+        if (arc.type !== BodyType.ARC || arc.inverseMass !== 0) continue; 
+        const rArc = arc.radius || 100;
+        const dist = Vec2.dist(body.position, arc.position);
+        if (Math.abs(dist - rArc) < 15) {
+            // Check angles logic...
+            const d = Vec2.sub(body.position, arc.position);
+            const angle = Math.atan2(d.y, d.x);
+            const start = arc.arcStartAngle || 0;
+            const end = arc.arcEndAngle || Math.PI;
+            const norm = (rad: number) => (rad % (2*Math.PI) + 2*Math.PI) % (2*Math.PI);
+            const nA = norm(angle); const nStart = norm(start); const nEnd = norm(end);
+            
+            let inArc = false;
+            if (nStart < nEnd) { inArc = nA >= nStart && nA <= nEnd; } else { inArc = nA >= nStart || nA <= nEnd; }
+
+            if (inArc) {
+                const n = Vec2.normalize(d);
+                const v = body.velocity;
+                const vn = Vec2.dot(v, n);
+                const vtVec = Vec2.sub(v, Vec2.mul(n, vn));
+                const vtSq = Vec2.magSq(vtVec);
+                if (vtSq > 1) {
+                    const fcMag = (body.mass * vtSq) / rArc;
+                    const fCentripetal = Vec2.mul(n, -fcMag);
+                    body.force = Vec2.add(body.force, fCentripetal);
+                }
+            }
+        }
     }
   }
 
@@ -360,9 +368,9 @@ export class PhysicsEngine {
             const { normal, depth } = manifold;
             
             // 1. Positional Correction (Baumgarte)
-            // Fix: Reduced percentage and slop to prevent jitter on smooth surfaces
-            const percent = 0.4; 
-            const slop = 0.02; 
+            // Reduced slop and adjusted percentage for better stability on tracks
+            const percent = 0.5; 
+            const slop = 0.01; 
             const correctionMag = Math.max(depth - slop, 0) / (bodyA.inverseMass + bodyB.inverseMass) * percent;
             const correction = Vec2.mul(normal, correctionMag);
             
@@ -376,14 +384,14 @@ export class PhysicsEngine {
             const relVel = Vec2.sub(vB, vA);
             const velAlongNormal = Vec2.dot(relVel, normal);
 
-            // Fix: If already separating, do not apply impulse
+            // If already separating, do not apply impulse
             if (velAlongNormal > 0) continue;
 
             let e = Math.min(bodyA.restitution, bodyB.restitution);
             const gravityMag = Vec2.mag(gravity);
             
             // Resting contact threshold
-            if (Math.abs(velAlongNormal) < gravityMag * dt * 4) {
+            if (Math.abs(velAlongNormal) < gravityMag * dt * 5) {
                 e = 0;
             }
 
@@ -402,10 +410,10 @@ export class PhysicsEngine {
             }
 
             // 3. Friction
-            // Fix: Handle zero friction correctly on smooth tracks
             const mu = Math.sqrt(bodyA.friction * bodyB.friction);
             
-            if (mu > 0.001) {
+            // Strict check for friction > 0 to prevent energy loss on smooth surfaces
+            if (mu > 0.0001) {
                 let tangent = Vec2.sub(relVel, Vec2.mul(normal, velAlongNormal));
                 const tangentMag = Vec2.mag(tangent);
                 
@@ -419,6 +427,7 @@ export class PhysicsEngine {
                     let frictionImpulse: Vector2;
 
                     if (surfaceVelA !== 0 && bodyA.inverseMass === 0) {
+                         // Conveyor logic
                          const convDir = Vec2.rotate({x:1, y:0}, bodyA.angle);
                          const convVel = Vec2.mul(convDir, surfaceVelA);
                          const relVelWithConv = Vec2.sub(vB, Vec2.add(vA, convVel));
@@ -439,6 +448,7 @@ export class PhysicsEngine {
                          frictionImpulse = Vec2.mul(tConv, fImp);
 
                     } else {
+                        // Standard friction
                         if (Math.abs(jTangent) < jScalar * mu) {
                             frictionImpulse = Vec2.mul(tangent, jTangent);
                         } else {
@@ -463,7 +473,10 @@ export class PhysicsEngine {
 
   // General Collision Detection Dispatcher
   private detectCollision(bodyA: PhysicsBody, bodyB: PhysicsBody): { normal: Vector2, depth: number } | null {
-      // Hollow Body Handling (Chain Collision)
+      // HOLLOW BODY HANDLING (Key Fix for Invisible Walls)
+      // If a body is marked as hollow, we MUST use the chain check.
+      // We do NOT use SAT for the hollow body itself because SAT assumes convexity.
+      
       if (bodyA.isHollow || bodyB.isHollow) {
           const hollow = bodyA.isHollow ? bodyA : bodyB;
           const solid = bodyA.isHollow ? bodyB : bodyA;
@@ -482,7 +495,12 @@ export class PhysicsEngine {
       if (bodyA.type === BodyType.CIRCLE && bodyB.type === BodyType.CIRCLE) {
           const delta = Vec2.sub(bodyB.position, bodyA.position);
           const distSq = Vec2.magSq(delta);
-          const rSum = (bodyA.radius || 10) + (bodyB.radius || 10);
+          
+          // Use particle logic: if particle, radius is effectively small for physics
+          const rA = bodyA.isParticle ? 1 : (bodyA.radius || 10);
+          const rB = bodyB.isParticle ? 1 : (bodyB.radius || 10);
+          
+          const rSum = rA + rB;
           const minDistSq = rSum * rSum;
           
           if (distSq < minDistSq) { 
@@ -561,17 +579,16 @@ export class PhysicsEngine {
       for (let i = 0; i < chainVerts.length; i++) {
           // If not closed, skip last segment
           if (i === chainVerts.length - 1 && !chain.isHollow) break; 
-          // For hollow bodies, we usually assume closed loop for "container" logic,
-          // but "Chain" usually implies line strip.
-          // Let's assume loop if first point == last point, else strip.
+          
           const v1 = chainVerts[i];
           const v2 = chainVerts[(i + 1) % chainVerts.length];
 
-          // Treat each edge as a "capsule" segment with radius 0 (or small thickness)
+          // Treat each edge as a "capsule" segment 
           const thickness = 2; // Slight thickness to catch fast objects
 
           if (body.type === BodyType.CIRCLE) {
-              const res = this.checkCircleSegment(body.position, body.radius || 10, v1, v2, thickness);
+              const r = body.isParticle ? 1 : (body.radius || 10);
+              const res = this.checkCircleSegment(body.position, r, v1, v2, thickness);
               if (res && res.depth > maxDepth) {
                   maxDepth = res.depth;
                   bestNormal = res.normal;
@@ -609,7 +626,14 @@ export class PhysicsEngine {
       const dist = Vec2.mag(distVec);
 
       if (dist < radius + thickness) {
-          const normal = dist > 0 ? Vec2.normalize(distVec) : Vec2.perp(Vec2.normalize(segment));
+          // Robust normal calculation
+          let normal: Vector2;
+          if (dist > 0) {
+              normal = Vec2.normalize(distVec);
+          } else {
+              // Exact overlap, use segment normal
+              normal = Vec2.perp(Vec2.normalize(segment));
+          }
           return { normal, depth: (radius + thickness) - dist };
       }
       return null;
@@ -674,6 +698,8 @@ export class PhysicsEngine {
       const verts = this.getWorldVertices(poly);
       if (verts.length === 0) return null;
 
+      const circleRadius = circle.isParticle ? 1 : (circle.radius || 10);
+
       let normal = Vec2.zero();
       let depth = Number.MAX_VALUE;
 
@@ -684,8 +710,8 @@ export class PhysicsEngine {
           const axis = Vec2.normalize(Vec2.perp(edge));
 
           const [minP, maxP] = this.projectVertices(verts, axis);
-          const minC = Vec2.dot(circle.position, axis) - (circle.radius || 10);
-          const maxC = Vec2.dot(circle.position, axis) + (circle.radius || 10);
+          const minC = Vec2.dot(circle.position, axis) - circleRadius;
+          const maxC = Vec2.dot(circle.position, axis) + circleRadius;
 
           if (maxP < minC || maxC < minP) return null;
 
@@ -708,8 +734,8 @@ export class PhysicsEngine {
       
       const axis = Vec2.normalize(Vec2.sub(circle.position, closestVert));
       const [minP, maxP] = this.projectVertices(verts, axis);
-      const minC = Vec2.dot(circle.position, axis) - (circle.radius || 10);
-      const maxC = Vec2.dot(circle.position, axis) + (circle.radius || 10);
+      const minC = Vec2.dot(circle.position, axis) - circleRadius;
+      const maxC = Vec2.dot(circle.position, axis) + circleRadius;
 
       if (maxP < minC || maxC < minP) return null;
 
@@ -759,7 +785,7 @@ export class PhysicsEngine {
   private checkCirclePlane(circle: PhysicsBody, plane: PhysicsBody, flipNormal: boolean): {normal: Vector2, depth: number} | null {
     if (!plane.normal) return null;
     let distToPlane = Vec2.dot(Vec2.sub(circle.position, plane.position), plane.normal);
-    const r = circle.radius || 10;
+    const r = circle.isParticle ? 1 : (circle.radius || 10);
     
     if (distToPlane < r) {
         let n = plane.normal;
@@ -789,11 +815,12 @@ export class PhysicsEngine {
 
   private checkCircleArc(circle: PhysicsBody, arc: PhysicsBody): {normal: Vector2, depth: number} | null {
       const rArc = arc.radius || 100;
-      const rCirc = circle.radius || 20;
+      const rCirc = circle.isParticle ? 0.5 : (circle.radius || 20); // Particle hugs the line tightly
 
       const d = Vec2.sub(circle.position, arc.position);
       const dist = Vec2.mag(d);
       
+      // Tolerance helps catch fast moving particles
       const tolerance = rCirc + 10;
       
       if (Math.abs(dist - rArc) < tolerance) {

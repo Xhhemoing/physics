@@ -1,4 +1,5 @@
 
+
 import React, { useRef, useEffect, useState, useImperativeHandle, forwardRef, useMemo } from 'react';
 import { BodyType, SimulationState, FieldType, Vector2, FieldShape, ConstraintType, PhysicsField } from '../types';
 import { Vec2 } from '../services/vectorMath';
@@ -204,10 +205,17 @@ const SimulationCanvas = forwardRef<CanvasRef, Props>(({ state, onSelectBody, on
            if (body.vertices && body.vertices.length > 0) {
               ctx.beginPath(); ctx.moveTo(body.vertices[0].x, body.vertices[0].y);
               for (let i = 1; i < body.vertices.length; i++) ctx.lineTo(body.vertices[i].x, body.vertices[i].y);
-              ctx.closePath();
-              if (body.isHollow) {
-                  ctx.strokeStyle = body.color; ctx.lineWidth = 4/state.camera.zoom; ctx.stroke();
+              
+              // Only close path if not hollow, or if explicitly closed chain (but usually we render chain as open strip if possible)
+              // Here we treat hollow polygon as closed loop usually.
+              if (body.isHollow && body.vertices.length > 2) {
+                   ctx.closePath();
+                   ctx.strokeStyle = body.color; ctx.lineWidth = 4/state.camera.zoom; ctx.stroke();
+              } else if (body.isHollow) {
+                   // Open chain (2 points)
+                   ctx.strokeStyle = body.color; ctx.lineWidth = 4/state.camera.zoom; ctx.stroke();
               } else {
+                   ctx.closePath();
                    ctx.fill(); ctx.shadowColor = 'transparent'; ctx.stroke();
               }
           }
@@ -237,8 +245,8 @@ const SimulationCanvas = forwardRef<CanvasRef, Props>(({ state, onSelectBody, on
                      const vec = val as Vector2;
                      if (Vec2.magSq(vec) > 0.1) {
                          let color = '#fff';
-                         if (name === 'Gravity') color = '#22c55e'; if (name === 'Normal' || name.includes('Normal')) color = '#eab308';
-                         if (name === 'Friction') color = '#f97316'; if (name === 'Electric') color = '#f472b6';
+                         if (name === 'Gravity' || name === 'Univ. Gravity') color = '#22c55e'; if (name === 'Normal' || name.includes('Normal')) color = '#eab308';
+                         if (name === 'Friction' || name === 'Drag') color = '#f97316'; if (name === 'Electric') color = '#f472b6';
                          if (name === 'Magnetic') color = '#3b82f6'; if (name === 'Spring') color = '#06b6d4';
                          if (name === 'Custom') color = '#d946ef'; if (name === 'Coulomb') color = '#f0abfc';
                          drawVector(ctx, vec, color, name, 1.0, true);
@@ -264,7 +272,13 @@ const SimulationCanvas = forwardRef<CanvasRef, Props>(({ state, onSelectBody, on
               ctx.beginPath();
               ctx.moveTo(body.trail[0].x, body.trail[0].y);
               for(let i=1; i<body.trail.length; i++) ctx.lineTo(body.trail[i].x, body.trail[i].y);
-              ctx.strokeStyle = body.color; ctx.globalAlpha = 0.5; ctx.lineWidth = 1 / state.camera.zoom; ctx.stroke();
+              
+              ctx.strokeStyle = body.color; 
+              ctx.globalAlpha = 0.5; 
+              ctx.lineWidth = 1.5 / state.camera.zoom; 
+              ctx.lineJoin = 'round'; // Smooth joins
+              ctx.lineCap = 'round';
+              ctx.stroke();
               ctx.restore();
           }
       });
@@ -340,7 +354,7 @@ const SimulationCanvas = forwardRef<CanvasRef, Props>(({ state, onSelectBody, on
           ctx.restore();
       }
       
-      // Ramp/Line Builder Preview (Fix: Missing visual)
+      // Ramp/Line Builder Preview
       if (rampCreation) {
           ctx.save();
           ctx.strokeStyle = '#f8fafc'; ctx.lineWidth = 2 / state.camera.zoom;
@@ -352,7 +366,7 @@ const SimulationCanvas = forwardRef<CanvasRef, Props>(({ state, onSelectBody, on
           ctx.restore();
       }
 
-      // Field Builder Preview (Fix: Missing visual)
+      // Field Builder Preview
       if (fieldBuilder) {
           ctx.save();
           ctx.strokeStyle = '#10b981'; ctx.lineWidth = 1.5 / state.camera.zoom; ctx.setLineDash([4/state.camera.zoom, 4/state.camera.zoom]);
@@ -387,7 +401,7 @@ const SimulationCanvas = forwardRef<CanvasRef, Props>(({ state, onSelectBody, on
           ctx.restore();
       }
 
-      // Arc Logic
+      // Arc Logic Visuals
       if (arcCreation) {
           ctx.save();
           ctx.strokeStyle = '#38bdf8';
@@ -395,6 +409,7 @@ const SimulationCanvas = forwardRef<CanvasRef, Props>(({ state, onSelectBody, on
           ctx.setLineDash([5 / state.camera.zoom, 5 / state.camera.zoom]);
 
           if (arcCreation.phase === 1) {
+              // Dragging out radius
               const currentRadius = Vec2.dist(arcCreation.center, snappedMousePos);
               ctx.beginPath();
               ctx.arc(arcCreation.center.x, arcCreation.center.y, currentRadius, 0, Math.PI * 2);
@@ -402,12 +417,27 @@ const SimulationCanvas = forwardRef<CanvasRef, Props>(({ state, onSelectBody, on
               ctx.beginPath(); ctx.moveTo(arcCreation.center.x, arcCreation.center.y); ctx.lineTo(snappedMousePos.x, snappedMousePos.y);
               ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.stroke();
           } else if (arcCreation.phase === 2) {
+              const currentRadius = Vec2.dist(arcCreation.center, snappedMousePos);
+              ctx.beginPath(); ctx.arc(arcCreation.center.x, arcCreation.center.y, currentRadius, 0, Math.PI * 2);
+              ctx.globalAlpha = 0.3; ctx.stroke(); ctx.globalAlpha = 1.0;
+              ctx.beginPath(); ctx.moveTo(arcCreation.center.x, arcCreation.center.y); ctx.lineTo(snappedMousePos.x, snappedMousePos.y);
+              ctx.stroke();
+
+          } else if (arcCreation.phase === 3) {
+              // Defining End Angle
               const currentRadius = arcCreation.radius;
               const start = arcCreation.startAngle;
               const currentPos = Vec2.sub(snappedMousePos, arcCreation.center);
               let end = Math.atan2(currentPos.y, currentPos.x);
+              
+              // Draw the arc
               drawHatchedArc(ctx, arcCreation.center.x, arcCreation.center.y, currentRadius, start, end, '#38bdf8');
+              
+              // Draw line to current mouse
+              ctx.beginPath(); ctx.moveTo(arcCreation.center.x, arcCreation.center.y); ctx.lineTo(snappedMousePos.x, snappedMousePos.y);
+              ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.stroke();
           }
+          
           ctx.fillStyle = '#38bdf8';
           ctx.beginPath(); ctx.arc(arcCreation.center.x, arcCreation.center.y, 4 / state.camera.zoom, 0, Math.PI*2); ctx.fill();
           ctx.restore();
@@ -445,7 +475,10 @@ const SimulationCanvas = forwardRef<CanvasRef, Props>(({ state, onSelectBody, on
       const step = 0.2; // Radian step
       // Normalize angle range
       let range = end - start;
-      if (range < 0) range += Math.PI * 2;
+      if (range <= 0) range += Math.PI * 2; // Arcs usually go CCW
+      // Special case: if range is effectively 0 (start~end), draw nothing or full circle?
+      // For physics arc, usually valid range.
+      
       const numSteps = Math.ceil(range / step);
       
       ctx.beginPath();
