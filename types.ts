@@ -130,6 +130,7 @@ export interface PhysicsField {
 }
 
 export interface SimulationState {
+  canvasName: string; // Project Name
   bodies: PhysicsBody[];
   constraints: Constraint[];
   fields: PhysicsField[];

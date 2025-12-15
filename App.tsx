@@ -1,14 +1,17 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Play, Pause, RotateCcw, MousePointer2, Camera, Download, Link, Eclipse, MoveRight, Upload, Zap, Activity, Minus, Plus, Scan, Crosshair, ChevronDown, ChevronRight, Globe, Layers, Settings, Clock, Timer, Trash2, Scissors, Group, Combine, Pentagon, Calculator, X } from 'lucide-react';
+import { Activity, X, Calculator, Clock, Camera, Minus, Trash2, Settings } from 'lucide-react';
 import SimulationCanvas, { CanvasRef } from './components/SimulationCanvas';
 import PropertiesPanel from './components/PropertiesPanel';
 import DataCharts from './components/DataCharts';
+import { Header } from './components/Header';
+import { Toolbar } from './components/Toolbar';
 import { PhysicsEngine } from './services/physicsEngine';
 import { BodyType, PhysicsBody, SimulationState, Vector2, ConstraintType, FieldType, PhysicsField, FieldShape, Constraint } from './types';
 import { Vec2 } from './services/vectorMath';
 
 // Initial State
 const INITIAL_STATE: SimulationState = {
+  canvasName: 'New Project',
   bodies: [],
   constraints: [],
   fields: [],
@@ -17,15 +20,15 @@ const INITIAL_STATE: SimulationState = {
   gravity: { x: 0, y: 10 },
   enableCoulomb: false,
   enableUniversalGravity: false,
-  enableAirResistance: false, // Default to false for space-like behavior
+  enableAirResistance: false, 
   selectedBodyId: null,
   selectedFieldId: null,
   selectedConstraintId: null,
-  camera: { x: 0, y: 0, zoom: 1 } // Origin at top-left
+  camera: { x: 0, y: 0, zoom: 1 } 
 };
 
 interface ArcBuilder {
-    phase: 1 | 2 | 3; // 1: Center, 2: Start Point, 3: End Point
+    phase: 1 | 2 | 3; 
     center: Vector2;
     radius: number;
     startAngle: number;
@@ -44,55 +47,13 @@ interface Snapshot {
     thumbnail?: string;
 }
 
-// UI Helper Components
-
-const CollapsibleGroup = ({ icon, label, children, defaultOpen = false }: { icon: React.ReactNode, label: string, children?: React.ReactNode, defaultOpen?: boolean }) => {
-    const [isOpen, setIsOpen] = useState(defaultOpen);
-    return (
-        <div className="w-full px-1 mb-1">
-            <button 
-                onClick={() => setIsOpen(!isOpen)}
-                className={`flex items-center justify-between w-full p-2 rounded text-[10px] font-bold uppercase tracking-wider transition-colors ${isOpen ? 'bg-slate-800 text-slate-200' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'}`}
-            >
-                <div className="flex items-center gap-2">
-                    {icon}
-                    <span>{label}</span>
-                </div>
-                {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-            </button>
-            <div className={`overflow-hidden transition-all duration-300 ${isOpen ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'}`}>
-                <div className="flex flex-col gap-1 p-1 mt-1 border-l border-slate-700 ml-2 pl-2">
-                    {children}
-                </div>
-            </div>
-        </div>
-    );
-};
-
-const ToolBtn = ({ mode, setMode, target, icon, label }: { mode: string, setMode: (m: string) => void, target: string, icon: React.ReactNode, label: string }) => (
-    <button 
-        onClick={() => setMode(target)}
-        className={`p-1.5 w-full rounded transition flex flex-col items-center ${mode === target ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
-        title={label}
-    >
-        {icon}
-        <span className="text-[9px] mt-0.5 scale-90">{label}</span>
-    </button>
-);
-
-// SVGs for specific shapes requested
-const SquareIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="18" height="18" rx="2" /></svg>;
-const CircleIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10" /></svg>;
-const RampIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M22 20L2 20L22 4V20Z" /></svg>;
-const ParticleIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="4" /></svg>;
-
 const App: React.FC = () => {
   const [state, setState] = useState<SimulationState>(INITIAL_STATE);
   const [dragMode, setDragMode] = useState<string>('select');
   const [arcBuilder, setArcBuilder] = useState<ArcBuilder | null>(null);
   const [rampBuilder, setRampBuilder] = useState<RampBuilder | null>(null);
   const [polyBuilder, setPolyBuilder] = useState<Vector2[]>([]);
-  const [constraintBuilder, setConstraintBuilder] = useState<string | null>(null); // Holds first body ID
+  const [constraintBuilder, setConstraintBuilder] = useState<string | null>(null); 
   const [pinnedBodyId, setPinnedBodyId] = useState<string | null>(null);
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [showSnapshots, setShowSnapshots] = useState(false);
@@ -105,14 +66,13 @@ const App: React.FC = () => {
 
   const engineRef = useRef(new PhysicsEngine());
   const canvasRef = useRef<CanvasRef>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const reqRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
 
   // Animation Loop
   const tick = useCallback((time: number) => {
     if (!lastTimeRef.current) lastTimeRef.current = time;
-    const dt = Math.min((time - lastTimeRef.current) / 1000, 0.05); // Cap dt for stability
+    const dt = Math.min((time - lastTimeRef.current) / 1000, 0.05); 
     lastTimeRef.current = time;
 
     if (!state.paused) {
@@ -128,13 +88,11 @@ const App: React.FC = () => {
             prev.enableAirResistance
         );
         
-        // Update Trails with distance logic for smoothness
+        // Update Trails
         newBodies.forEach(b => {
             if (b.showTrajectory) {
                 if (!b.trail) b.trail = [];
                 const last = b.trail[b.trail.length - 1];
-                // Only add point if moved significantly (smoother curves, less memory)
-                // Threshold squared: 2*2 = 4
                 if (!last || Vec2.magSq(Vec2.sub(last, b.position)) > 4) {
                     b.trail.push({ ...b.position });
                     if (b.trail.length > 500) b.trail.shift();
@@ -183,8 +141,7 @@ const App: React.FC = () => {
   }, [state.selectedBodyId, state.bodies]);
 
   const handleTogglePause = () => setState(s => ({ ...s, paused: !s.paused }));
-  const handleReset = () => setState({ ...INITIAL_STATE, camera: state.camera });
-  const handleResetView = () => setState(s => ({ ...s, camera: { x: 0, y: 0, zoom: 1 } }));
+  const handleReset = () => setState({ ...INITIAL_STATE, camera: state.camera, canvasName: state.canvasName });
   
   const handleSelectBody = (id: string | null) => {
       // Constraint Construction Logic
@@ -249,14 +206,13 @@ const App: React.FC = () => {
   };
 
   const handleCombineBodies = (id1: string, id2: string) => {
+      // ... (Implementation same as previous)
       const b1 = state.bodies.find(b => b.id === id1);
       const b2 = state.bodies.find(b => b.id === id2);
       if (!b1 || !b2) return;
       
-      // Calculate vertices in world space
       const getVerts = (b: PhysicsBody) => {
           if (b.type === BodyType.CIRCLE) {
-               // Approximate circle
                const steps = 16;
                const vs = [];
                for(let i=0; i<steps; i++) {
@@ -276,13 +232,11 @@ const App: React.FC = () => {
       const allVerts = [...getVerts(b1), ...getVerts(b2)];
       const hull = Vec2.convexHull(allVerts);
       
-      // Calculate Centroid
       let cx = 0, cy = 0;
       hull.forEach(v => { cx += v.x; cy += v.y; });
       cx /= hull.length; cy /= hull.length;
       const center = { x: cx, y: cy };
       
-      // Localize vertices
       const localVerts = hull.map(v => ({ x: v.x - center.x, y: v.y - center.y }));
       
       const newBody: PhysicsBody = {
@@ -330,16 +284,6 @@ const App: React.FC = () => {
       });
   };
 
-  const setZoom = (z: number) => {
-      setState(s => {
-          const newZoom = Math.max(0.01, Math.min(20, z));
-          const cx = window.innerWidth / 2; const cy = window.innerHeight / 2;
-          const worldCx = (cx - s.camera.x) / s.camera.zoom; const worldCy = (cy - s.camera.y) / s.camera.zoom;
-          const newCamX = cx - worldCx * newZoom; const newCamY = cy - worldCy * newZoom;
-          return { ...s, camera: { ...s.camera, x: newCamX, y: newCamY, zoom: newZoom } };
-      });
-  };
-
   const handleBodyMove = (id: string, pos: Vector2) => {
       setState(s => ({
           ...s,
@@ -360,8 +304,8 @@ const App: React.FC = () => {
           type: FieldType.UNIFORM_ELECTRIC, // Default
           shape: shape,
           position: pos,
-          size: vertices && vertices.length === 1 ? vertices[0] : {x: 200, y: 200}, // Vertices[0] carries size for box
-          radius: vertices && vertices.length === 1 ? vertices[0].x : 100, // Vertices[0].x carries radius for circle
+          size: vertices && vertices.length === 1 ? vertices[0] : {x: 200, y: 200}, 
+          radius: vertices && vertices.length === 1 ? vertices[0].x : 100, 
           vertices: shape === FieldShape.POLYGON ? vertices : undefined,
           strength: { x: 10, y: 0 },
           equations: { ex: "Math.sin(x/50) * 50", ey: "0" }, 
@@ -514,10 +458,15 @@ const App: React.FC = () => {
   };
 
   const handleSaveScene = () => {
-      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(state));
+      const exportData = {
+          state,
+          snapshots,
+          version: "2.0"
+      };
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportData));
       const downloadAnchorNode = document.createElement('a');
       downloadAnchorNode.setAttribute("href", dataStr);
-      downloadAnchorNode.setAttribute("download", "physlab_scene.json");
+      downloadAnchorNode.setAttribute("download", `${state.canvasName || 'physlab_scene'}.json`);
       document.body.appendChild(downloadAnchorNode);
       downloadAnchorNode.click();
       downloadAnchorNode.remove();
@@ -530,21 +479,22 @@ const App: React.FC = () => {
           fileReader.onload = e => {
               if (e.target?.result) {
                   try {
-                      const parsedState = JSON.parse(e.target.result as string);
-                      if (parsedState.bodies && parsedState.camera) { 
-                          // Completely reset state
+                      const data = JSON.parse(e.target.result as string);
+                      // Support both new (wrapped) and old (flat) formats
+                      const newState = data.state || data;
+                      if (newState.bodies && newState.camera) { 
                           setState({
                               ...INITIAL_STATE,
-                              ...parsedState,
+                              ...newState,
                               paused: true 
                           });
+                          if (data.snapshots) setSnapshots(data.snapshots);
                       } else { 
                           alert("无效的场景文件"); 
                       }
                   } catch (err) { alert("JSON 解析错误"); }
               }
           };
-          // Reset file input so onChange triggers again for same file
           event.target.value = '';
       }
   };
@@ -560,7 +510,6 @@ const App: React.FC = () => {
 
   const setPreset = (type: 'smooth' | 'elastic') => {
       setState(s => ({ ...s, bodies: s.bodies.map(b => { 
-          // Do not skip static bodies (inverseMass == 0) so we can smooth tracks/ramps too
           if (type === 'smooth') return { ...b, friction: 0 }; 
           if (type === 'elastic') return { ...b, restitution: 1.0 }; 
           return b; 
@@ -585,10 +534,8 @@ const App: React.FC = () => {
           let cx = 0, cy = 0; points.forEach(p => { cx += p.x; cy += p.y; });
           cx /= points.length; cy /= points.length;
           const center = {x: cx, y: cy};
-          // Localize
           const localVerts = points.map(p => ({ x: p.x - center.x, y: p.y - center.y }));
 
-          // Determine Mass (Static if hollow/chain)
           const mass = eqParams.isHollow ? 0 : 5;
           const invMass = mass === 0 ? 0 : 1/mass;
 
@@ -601,8 +548,6 @@ const App: React.FC = () => {
              angle: 0, angularVelocity: 0, momentInertia: 100, inverseInertia: 0.01,
              vertices: localVerts, color: eqParams.isHollow ? '#f59e0b' : '#14b8a6', 
              selected: true, showTrajectory: false, trail: [],
-             // Important: Equation shapes often act as tracks or containers, so we use hollow/chain mode
-             // This prevents Convex Hull logic from creating "invisible walls" across concave sections.
              isHollow: eqParams.isHollow
           };
           setState(s => ({ ...s, bodies: [...s.bodies, newBody], selectedBodyId: newBody.id }));
@@ -619,148 +564,34 @@ const App: React.FC = () => {
 
   return (
     <div className="w-full h-screen flex flex-col bg-slate-950 text-slate-200 overflow-hidden font-sans">
-      {/* Header */}
-      <header className="h-12 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-4 z-20">
-        <div className="flex items-center space-x-2">
-            <Activity className="text-blue-500" />
-            <h1 className="font-bold text-lg tracking-tight bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">PhysLab Pro</h1>
-        </div>
-        
-        <div className="flex items-center space-x-4">
-             <div className="flex items-center bg-slate-800 rounded-lg p-1 space-x-1">
-                 <button 
-                    onClick={handleTogglePause}
-                    className={`p-1.5 rounded-md transition ${state.paused ? 'bg-green-600 hover:bg-green-500 text-white' : 'hover:bg-slate-700 text-slate-300'}`}
-                    title={state.paused ? "Play" : "Pause"}
-                 >
-                     {state.paused ? <Play size={18} fill="currentColor" /> : <Pause size={18} fill="currentColor" />}
-                 </button>
-                 <button 
-                    onClick={handleReset}
-                    className="p-1.5 rounded-md hover:bg-slate-700 text-slate-300 transition"
-                    title="Reset Simulation"
-                 >
-                     <RotateCcw size={18} />
-                 </button>
-             </div>
-             
-             <div className="h-6 w-px bg-slate-700 mx-2" />
-             
-             <div className="flex items-center gap-2">
-                 <button onClick={() => setShowSnapshots(!showSnapshots)} className={`p-1.5 rounded transition ${showSnapshots ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-amber-400'}`} title="Snapshots">
-                    <Timer size={18} />
-                 </button>
-                 <button onClick={() => setShowGlobalSettings(!showGlobalSettings)} className={`p-1.5 rounded transition ${showGlobalSettings ? 'bg-purple-600 text-white' : 'text-slate-400 hover:text-purple-400'}`} title="Global Settings">
-                    <Settings size={18} />
-                 </button>
-             </div>
+      <Header 
+          state={state}
+          onTogglePause={handleTogglePause}
+          onReset={handleReset}
+          onClearAll={clearAll}
+          onPreset={setPreset}
+          onSaveScene={handleSaveScene}
+          onImportScene={handleImportScene}
+          canvasRef={canvasRef}
+          showSnapshots={showSnapshots}
+          setShowSnapshots={setShowSnapshots}
+          showSettings={showGlobalSettings}
+          setShowSettings={setShowGlobalSettings}
+          onChangeName={(name) => setState(s => ({...s, canvasName: name}))}
+      />
 
-             <div className="h-6 w-px bg-slate-700 mx-2" />
-
-             <div className="flex space-x-2 text-xs">
-                 <button onClick={() => setPreset('smooth')} className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded transition" title="将所有物体（包括轨道）摩擦力设为0">一键光滑</button>
-                 <button onClick={() => setPreset('elastic')} className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded transition">完全弹性</button>
-                 <button onClick={clearAll} className="px-3 py-1.5 bg-red-900/30 hover:bg-red-900/50 text-red-300 rounded transition">清空</button>
-             </div>
-        </div>
-
-        <div className="flex items-center space-x-3">
-             <button onClick={() => canvasRef.current?.exportImage()} className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white" title="Export Image">
-                 <Camera size={18} />
-             </button>
-             <button onClick={handleSaveScene} className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white" title="Save Scene">
-                 <Download size={18} />
-             </button>
-             <label className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white cursor-pointer" title="Load Scene">
-                 <Upload size={18} />
-                 <input type="file" ref={fileInputRef} onChange={handleImportScene} className="hidden" accept=".json" />
-             </label>
-        </div>
-      </header>
-
-      {/* Main Content */}
       <div className="flex-1 flex overflow-hidden relative">
           
-          {/* Left Toolbar */}
-          <aside className="w-20 bg-slate-900 border-r border-slate-800 flex flex-col py-2 overflow-y-auto no-scrollbar select-none z-10 items-center">
-              
-              <div className="flex flex-col items-center gap-1 mb-2 w-full px-1">
-                 <button 
-                      onClick={() => setDragMode('select')}
-                      className={`p-2 w-full rounded-lg transition flex flex-col items-center ${dragMode === 'select' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
-                      title="选择 (Select)"
-                  >
-                      <MousePointer2 size={20} />
-                      <span className="text-[9px] mt-1">选择</span>
-                  </button>
-              </div>
+          <Toolbar 
+              dragMode={dragMode}
+              setDragMode={setDragMode}
+              setPolyBuilder={setPolyBuilder}
+              setArcBuilder={setArcBuilder}
+              setRampBuilder={setRampBuilder}
+              setCombineSelection={setCombineSelection}
+              setShowEquationBuilder={setShowEquationBuilder}
+          />
 
-              {/* Group: Shapes */}
-              <CollapsibleGroup icon={<SquareIcon />} label="形状" defaultOpen={true}>
-                  <ToolBtn mode={dragMode} setMode={setDragMode} target="add_circle" icon={<CircleIcon />} label="圆形" />
-                  <ToolBtn mode={dragMode} setMode={setDragMode} target="add_box" icon={<SquareIcon />} label="矩形" />
-                  <ToolBtn mode={dragMode} setMode={setDragMode} target="add_particle" icon={<ParticleIcon />} label="质点" />
-                  <ToolBtn mode={dragMode} setMode={(m) => { setDragMode(m); setPolyBuilder([]); }} target="add_poly" icon={<Pentagon size={18} />} label="多边形" />
-                  <button onClick={() => setShowEquationBuilder(true)} className="p-1.5 w-full rounded transition flex flex-col items-center text-slate-400 hover:bg-slate-800" title="方程生成">
-                      <Calculator size={18} />
-                      <span className="text-[9px] mt-0.5 scale-90">方程</span>
-                  </button>
-              </CollapsibleGroup>
-
-              {/* Group: Environment */}
-              <CollapsibleGroup icon={<RampIcon />} label="环境">
-                  <button 
-                      onClick={() => { setDragMode('add_arc'); setArcBuilder(null); }}
-                      className={`p-1.5 w-full rounded transition flex flex-col items-center ${dragMode === 'add_arc' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
-                      title="弧形轨道"
-                  >
-                      <Eclipse size={18} />
-                      <span className="text-[9px] mt-0.5 scale-90">轨道</span>
-                  </button>
-                   <button 
-                      onClick={() => { setDragMode('add_ramp'); setRampBuilder(null); }}
-                      className={`p-1.5 w-full rounded transition flex flex-col items-center ${dragMode === 'add_ramp' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
-                      title="斜面"
-                  >
-                      <RampIcon />
-                      <span className="text-[9px] mt-0.5 scale-90">斜面</span>
-                  </button>
-                  <button 
-                      onClick={() => { setDragMode('add_conveyor'); setRampBuilder(null); }}
-                      className={`p-1.5 w-full rounded transition flex flex-col items-center ${dragMode === 'add_conveyor' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
-                      title="传送带"
-                  >
-                      <MoveRight size={18} />
-                      <span className="text-[9px] mt-0.5 scale-90">传送带</span>
-                  </button>
-              </CollapsibleGroup>
-
-              {/* Group: Linkage */}
-              <CollapsibleGroup icon={<Link size={16} />} label="连接">
-                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_spring" icon={<Activity size={18} />} label="弹簧" />
-                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_rod" icon={<Link size={18} />} label="刚性杆" />
-                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_rope" icon={<Minus size={18} className="rotate-45" />} label="轻绳" />
-                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_pin" icon={<Crosshair size={18} />} label="销钉" />
-              </CollapsibleGroup>
-
-              {/* Group: Fields */}
-              <CollapsibleGroup icon={<Zap size={16} />} label="场">
-                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_field_box" icon={<Scan size={18} />} label="矩形场" />
-                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_field_circle" icon={<Globe size={18} />} label="圆形场" />
-                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_field_poly" icon={<Layers size={18} />} label="多边形" />
-              </CollapsibleGroup>
-
-              {/* Group: Tools */}
-              <CollapsibleGroup icon={<Settings size={16} />} label="工具">
-                   <ToolBtn mode={dragMode} setMode={setDragMode} target="tool_velocity" icon={<MoveRight size={18} className="-rotate-45" />} label="速度" />
-                   <ToolBtn mode={dragMode} setMode={setDragMode} target="tool_force" icon={<Zap size={18} />} label="恒力" />
-                   <ToolBtn mode={dragMode} setMode={(m) => { setDragMode(m); setCombineSelection([]); }} target="tool_combine" icon={<Combine size={18} />} label="合并" />
-                   <ToolBtn mode={dragMode} setMode={setDragMode} target="tool_cut" icon={<Scissors size={18} />} label="切割" />
-              </CollapsibleGroup>
-
-          </aside>
-
-          {/* Canvas Area */}
           <main className="flex-1 relative bg-slate-950">
              <SimulationCanvas 
                 ref={canvasRef}
@@ -775,8 +606,6 @@ const App: React.FC = () => {
                 dragMode={dragMode}
                 onZoom={handleZoom}
                 onPauseToggle={(p) => setState(s => ({...s, paused: p}))}
-                // When passing arcCreation to Canvas, ensure it has necessary data for rendering
-                // App manages the phase logic, Canvas just renders what is given
                 arcCreation={arcBuilder} 
                 rampCreation={rampBuilder}
                 constraintBuilder={constraintBuilder}
@@ -834,14 +663,13 @@ const App: React.FC = () => {
                  </div>
              )}
 
-             {/* Polygon Builder Hint */}
+             {/* Hints */}
              {dragMode === 'add_poly' && (
                   <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-emerald-900/80 text-emerald-100 px-3 py-1 rounded-full text-xs shadow-lg pointer-events-none">
                       {polyBuilder.length === 0 ? "点击画布添加顶点" : polyBuilder.length < 3 ? "继续添加顶点..." : "点击起点闭合形状"}
                   </div>
              )}
              
-             {/* Combine Hint */}
              {dragMode === 'tool_combine' && (
                  <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-blue-900/80 text-blue-100 px-3 py-1 rounded-full text-xs shadow-lg pointer-events-none">
                      {combineSelection.length === 0 ? "依次点击两个物体进行合并" : "点击第二个物体..."}
@@ -863,7 +691,6 @@ const App: React.FC = () => {
                      <span className="font-mono">{state.bodies.length}</span>
                  </div>
                  
-                 {/* Hints */}
                  {arcBuilder && (
                      <p className="text-blue-400 font-bold mt-1 border-t border-slate-700 pt-1">
                          {arcBuilder.phase === 1 ? '步骤 1: 点击圆心' : arcBuilder.phase === 2 ? '步骤 2: 点击起点(定义半径)' : '步骤 3: 点击终点'}
@@ -991,18 +818,10 @@ const App: React.FC = () => {
                       </div>
                  </div>
              )}
-             
-             {/* Zoom Controls */}
-             <div className="absolute bottom-4 left-4 flex flex-col space-y-1 z-10">
-                 <button onClick={() => setZoom(state.camera.zoom * 1.2)} className="p-2 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 shadow-lg"><Plus size={16} /></button>
-                 <button onClick={() => setZoom(state.camera.zoom / 1.2)} className="p-2 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 shadow-lg"><Minus size={16} /></button>
-                 <button onClick={handleResetView} className="p-2 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 shadow-lg"><Scan size={16} /></button>
-             </div>
           </main>
 
           {/* Right Panel */}
           <aside className="w-80 bg-slate-900 border-l border-slate-800 flex flex-col z-10">
-              {/* Top: Properties */}
               <div className="flex-1 overflow-y-auto no-scrollbar border-b border-slate-800">
                   <PropertiesPanel 
                       body={state.selectedBodyId ? state.bodies.find(b => b.id === state.selectedBodyId) || null : null}
@@ -1017,7 +836,6 @@ const App: React.FC = () => {
                   />
               </div>
               
-              {/* Bottom: Graphs (Only show if not pinned or if pinned ID is different from selected) */}
               <div className="h-64 bg-slate-900 flex flex-col p-2 transition-all">
                   <div className="flex items-center justify-between mb-2 px-1">
                       <span className="text-xs font-semibold text-slate-500 uppercase">实时数据 (Data)</span>
