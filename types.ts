@@ -1,5 +1,4 @@
 
-
 // Fundamental Vector Type
 export interface Vector2 {
   x: number;
@@ -12,12 +11,14 @@ export enum BodyType {
   BOX = 'BOX',
   POLYGON = 'POLYGON',
   PLANE = 'PLANE', // Infinite floor/wall
-  ARC = 'ARC'      // Curved track
+  ARC = 'ARC',      // Curved track
+  LINE = 'LINE'     // Thin line (Ramp/Conveyor)
 }
 
 // Physics Body Properties
 export interface PhysicsBody {
   id: string;
+  label: string; // Visible Label (e.g. "B1")
   type: BodyType;
   position: Vector2;
   velocity: Vector2;
@@ -55,10 +56,15 @@ export interface PhysicsBody {
   height?: number; // For Box
   vertices?: Vector2[]; // For Polygon (Local coordinates relative to position)
   normal?: Vector2; // For Plane
+  length?: number; // For Line/Ramp
   
   // Special Flags
   isParticle?: boolean; // If true, renders as a point, ignores radius for visual
   isHollow?: boolean; // If true, treated as a chain of edges (for containers/tracks)
+  isLine?: boolean;   // If true, renders as a thin line
+  
+  // Visual Customization
+  image?: string; // URL of image to render
   
   // Arc Specific
   arcStartAngle?: number; // Radians
@@ -66,6 +72,15 @@ export interface PhysicsBody {
 
   // Conveyor Specific
   surfaceSpeed?: number; // Speed along local X axis (tangent)
+
+  // Custom Equation Display
+  customGraph?: {
+      show: boolean;
+      eqX: string; // Equation for X plot (e.g. "t")
+      eqY: string; // Equation for Y plot (e.g. "v")
+      color: string;
+      data: Vector2[];
+  };
 
   // Visuals
   color: string;
@@ -129,6 +144,12 @@ export interface PhysicsField {
   visible: boolean;
 }
 
+export interface PinnedChart {
+    id: string;
+    bodyId: string;
+    position: { x: number, y: number };
+}
+
 export interface SimulationState {
   canvasName: string; // Project Name
   bodies: PhysicsBody[];
@@ -143,11 +164,16 @@ export interface SimulationState {
   selectedBodyId: string | null;
   selectedFieldId: string | null;
   selectedConstraintId: string | null;
+  
   camera: {
     x: number;
     y: number;
     zoom: number;
+    trackingBodyId: string | null;
   };
+
+  pinnedCharts: PinnedChart[];
+  isRecording: boolean;
 }
 
 export enum ChartType {

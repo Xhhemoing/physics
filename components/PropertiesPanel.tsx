@@ -1,6 +1,4 @@
 
-
-
 import React from 'react';
 import { PhysicsBody, BodyType, PhysicsField, FieldType, Vector2, FieldShape, Constraint, ConstraintType } from '../types';
 
@@ -18,7 +16,6 @@ interface Props {
 
 const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBody, onUpdateField, onUpdateConstraint, onDeleteBody, onDeleteField, onDeleteConstraint }) => {
   
-  // Helper to insert text into active textarea
   const insertText = (text: string, axis: 'ex' | 'ey') => {
       if (!field || field.type !== FieldType.CUSTOM) return;
       const current = field.equations?.[axis] || "";
@@ -28,17 +25,6 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
               [axis]: current + text 
           } 
       });
-  };
-
-  const setEquationPreset = (preset: string) => {
-      if (!field || field.type !== FieldType.CUSTOM) return;
-      let ex = "0", ey = "0";
-      switch(preset) {
-          case 'wave': ex = "Math.sin(x/50 + t) * 50"; ey = "Math.cos(y/50 + t) * 50"; break;
-          case 'vortex': ex = "-y + 200"; ey = "x - 400"; break;
-          case 'repel': ex = "2000/(x - 400)"; ey = "2000/(y - 300)"; break;
-      }
-      onUpdateField(field.id, { equations: { ex, ey } });
   };
 
   // --- Constraint Panel ---
@@ -69,7 +55,7 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
                   {constraint.type === ConstraintType.SPRING && (
                       <>
                         <div>
-                            <label className="block text-[10px] text-slate-400 mb-1 uppercase">劲度系数 Stiffness (k)</label>
+                            <label className="block text-[10px] text-slate-400 mb-1 uppercase">劲度系数 (k)</label>
                             <input 
                                 type="number" step="0.1"
                                 value={constraint.stiffness} 
@@ -100,13 +86,6 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
                           />
                       </div>
                   )}
-                  
-                  <div className="p-2 bg-slate-800/30 rounded border border-slate-700">
-                      <p className="text-[10px] text-slate-500">
-                          连接对象 A: {constraint.bodyAId.split('_')[0]}...<br/>
-                          连接对象 B: {constraint.bodyBId.split('_')[0]}...
-                      </p>
-                  </div>
               </div>
           </div>
       );
@@ -165,18 +144,7 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
                                   </button>
                               </div>
                           </div>
-
-                          <p className="text-[10px] text-slate-400">
-                             {field.customType === 'MAGNETIC' 
-                                ? '磁场模式: Ex 计算为磁感应强度 B (Tesla)。Ey 被忽略。' 
-                                : '电场模式: Ex, Ey 计算为电场强度向量 E (N/C)。'}
-                          </p>
                           
-                          <div className="flex gap-2">
-                              <button onClick={() => setEquationPreset('wave')} className="text-[10px] bg-slate-700 px-2 py-1 rounded">波动</button>
-                              <button onClick={() => setEquationPreset('vortex')} className="text-[10px] bg-slate-700 px-2 py-1 rounded">旋涡</button>
-                          </div>
-
                           <div className="space-y-2">
                              <div className="flex flex-wrap gap-1">
                                 {['sin(t)', 'cos(t)', 'x', 'y', 't', 'sqrt()', 'abs()'].map(fn => (
@@ -184,7 +152,6 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
                                         key={fn}
                                         onClick={() => insertText(fn, 'ex')} 
                                         className="bg-slate-700 hover:bg-slate-600 text-[10px] text-white rounded px-1.5 py-0.5"
-                                        title="Insert to Ex"
                                     >
                                         Ex:{fn}
                                     </button>
@@ -223,10 +190,6 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
                               onChange={(e) => onUpdateField(field.id, { strength: parseFloat(e.target.value) })}
                               className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
                           />
-                          <p className="text-[10px] text-slate-500 mt-1">
-                              正数 (+): 垂直向外 (•)<br/>
-                              负数 (-): 垂直向内 (×)
-                          </p>
                       </div>
                   ) : (
                       <div className="grid grid-cols-2 gap-2">
@@ -295,7 +258,7 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
     return (
         <div className="p-4 text-slate-500 text-center text-sm flex flex-col items-center justify-center h-full opacity-50">
             <div className="mb-2 text-4xl">∅</div>
-            <p>未选择对象 (No Selection)</p>
+            <p>未选择对象</p>
         </div>
     );
   }
@@ -315,130 +278,164 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
         <div>
             <span className="text-xs text-slate-500 uppercase tracking-wider block">当前选择</span>
             <div className="flex items-center gap-2">
-                <h2 className="font-bold text-lg text-amber-400">{body.isParticle ? 'PARTICLE' : body.type}</h2>
-                {body.isParticle && <span className="text-[10px] bg-yellow-900 text-yellow-200 px-1 rounded border border-yellow-700">质点</span>}
+                <h2 className="font-bold text-lg text-amber-400">{body.label}</h2>
+                <span className="text-xs text-slate-500">({body.type})</span>
             </div>
         </div>
         <button 
             onClick={() => onDeleteBody(body.id)}
             className="text-red-400 hover:text-red-300 text-xs px-3 py-1.5 rounded bg-red-900/20 hover:bg-red-900/40 transition"
         >
-            删除 (Delete)
+            删除
         </button>
       </div>
 
       <div className="space-y-4">
-        {/* Research / Visual Tools */}
+        {/* Custom Image */}
+        <div>
+             <label className="block text-[10px] text-slate-400 mb-1 uppercase">自定义贴图 (URL)</label>
+             <input 
+                 type="text" 
+                 value={body.image || ''}
+                 onChange={(e) => onUpdateBody(body.id, { image: e.target.value })}
+                 placeholder="https://..."
+                 className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
+             />
+        </div>
+
+        {/* Visual Analysis */}
         <div className="space-y-3">
-            <h3 className="text-xs font-semibold text-slate-300 border-l-2 border-emerald-500 pl-2">可视分析 (Visual Analysis)</h3>
+            <h3 className="text-xs font-semibold text-slate-300 border-l-2 border-emerald-500 pl-2">可视分析</h3>
             
              <div className="grid grid-cols-2 gap-2">
                  <div className="flex items-center space-x-2">
                      <input 
                         type="checkbox" 
-                        id="traj"
                         checked={body.showTrajectory || false}
                         onChange={(e) => onUpdateBody(body.id, { showTrajectory: e.target.checked })}
                         className="w-4 h-4 rounded border-slate-600 bg-slate-800"
                      />
-                     <label htmlFor="traj" className="text-xs text-slate-400">轨迹 (Trail)</label>
+                     <label className="text-xs text-slate-400">轨迹</label>
                  </div>
                  
                  <div className="flex items-center space-x-2">
                      <input 
                         type="checkbox" 
-                        id="showVel"
                         checked={body.showVelocity || false}
                         onChange={(e) => onUpdateBody(body.id, { showVelocity: e.target.checked })}
                         className="w-4 h-4 rounded border-slate-600 bg-slate-800"
                      />
-                     <label htmlFor="showVel" className="text-xs text-slate-400">速度 (Vel)</label>
+                     <label className="text-xs text-slate-400">速度</label>
                  </div>
 
                  <div className="flex items-center space-x-2">
                      <input 
                         type="checkbox" 
-                        id="showAcc"
                         checked={body.showAcceleration || false}
                         onChange={(e) => onUpdateBody(body.id, { showAcceleration: e.target.checked })}
                         className="w-4 h-4 rounded border-slate-600 bg-slate-800"
                      />
-                     <label htmlFor="showAcc" className="text-xs text-slate-400">加速度 (Acc)</label>
+                     <label className="text-xs text-slate-400">加速度</label>
                  </div>
 
                  <div className="flex items-center space-x-2">
                      <input 
                         type="checkbox" 
-                        id="showForce"
                         checked={body.showForce || false}
                         onChange={(e) => onUpdateBody(body.id, { showForce: e.target.checked })}
                         className="w-4 h-4 rounded border-slate-600 bg-slate-800"
                      />
-                     <label htmlFor="showForce" className="text-xs text-slate-400">受力 (Force)</label>
-                 </div>
-                 
-                 <div className="flex items-center space-x-2">
-                     <input 
-                        type="checkbox" 
-                        id="showCharge"
-                        checked={body.showCharge || false}
-                        onChange={(e) => onUpdateBody(body.id, { showCharge: e.target.checked })}
-                        className="w-4 h-4 rounded border-slate-600 bg-slate-800"
-                     />
-                     <label htmlFor="showCharge" className="text-xs text-slate-400">电荷 (Charge)</label>
+                     <label className="text-xs text-slate-400">受力</label>
                  </div>
              </div>
         </div>
-
-        {/* Physical Props */}
+        
+        {/* Custom Graph */}
         <div className="space-y-3">
-            <h3 className="text-xs font-semibold text-slate-300 border-l-2 border-blue-500 pl-2">物理属性 (Physics)</h3>
+             <div className="flex justify-between items-center">
+                <h3 className="text-xs font-semibold text-slate-300 border-l-2 border-pink-500 pl-2">自定义图像 (x,y)</h3>
+                <input 
+                    type="checkbox"
+                    checked={body.customGraph?.show || false}
+                    onChange={(e) => onUpdateBody(body.id, { customGraph: { ...body.customGraph!, show: e.target.checked } })}
+                />
+             </div>
+             {body.customGraph?.show && (
+                 <div className="bg-slate-800/50 p-2 rounded text-xs space-y-2">
+                     <p className="text-[10px] text-slate-500">可用变量: x, y, vx, vy, v, ax, ay, a, m, ke</p>
+                     <div>
+                         <label className="block text-[10px] text-slate-400">X轴方程:</label>
+                         <input 
+                             type="text" 
+                             value={body.customGraph.eqX}
+                             onChange={(e) => onUpdateBody(body.id, { customGraph: { ...body.customGraph!, eqX: e.target.value } })}
+                             className="w-full bg-slate-900 border border-slate-700 rounded px-1"
+                         />
+                     </div>
+                     <div>
+                         <label className="block text-[10px] text-slate-400">Y轴方程:</label>
+                         <input 
+                             type="text" 
+                             value={body.customGraph.eqY}
+                             onChange={(e) => onUpdateBody(body.id, { customGraph: { ...body.customGraph!, eqY: e.target.value } })}
+                             className="w-full bg-slate-900 border border-slate-700 rounded px-1"
+                         />
+                     </div>
+                 </div>
+             )}
+        </div>
+
+        {/* Physics */}
+        <div className="space-y-3">
+            <h3 className="text-xs font-semibold text-slate-300 border-l-2 border-blue-500 pl-2">物理属性</h3>
             
-            <div className="grid grid-cols-2 gap-3">
-                <div>
-                    <label className="block text-[10px] text-slate-400 mb-1 uppercase">质量 Mass (kg)</label>
-                    <input 
-                        type="number" min="0"
-                        value={body.mass} 
-                        onChange={(e) => handleChange('mass', e.target.value)}
-                        className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm focus:border-blue-500 outline-none transition"
-                    />
+            {!body.isLine && (
+                <div className="grid grid-cols-2 gap-3">
+                    <div>
+                        <label className="block text-[10px] text-slate-400 mb-1 uppercase">质量 (kg)</label>
+                        <input 
+                            type="number" min="0"
+                            value={body.mass} 
+                            onChange={(e) => handleChange('mass', e.target.value)}
+                            className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-[10px] text-slate-400 mb-1 uppercase">电荷 (C)</label>
+                        <input 
+                            type="number" 
+                            value={body.charge} 
+                            onChange={(e) => handleChange('charge', e.target.value)}
+                            className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
+                        />
+                    </div>
                 </div>
-                <div>
-                    <label className="block text-[10px] text-slate-400 mb-1 uppercase">电荷 Charge (C)</label>
-                    <input 
-                        type="number" 
-                        value={body.charge} 
-                        onChange={(e) => handleChange('charge', e.target.value)}
-                        className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm focus:border-blue-500 outline-none transition"
-                    />
-                </div>
-            </div>
+            )}
 
             <div className="grid grid-cols-2 gap-3">
                 <div>
-                    <label className="block text-[10px] text-slate-400 mb-1 uppercase">弹性 Restitution</label>
+                    <label className="block text-[10px] text-slate-400 mb-1 uppercase">弹性系数</label>
                     <input 
                         type="number" step="0.1" min="0" max="1"
                         value={body.restitution} 
                         onChange={(e) => handleChange('restitution', e.target.value)}
-                        className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm focus:border-blue-500 outline-none transition"
+                        className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
                     />
                 </div>
                 <div>
-                    <label className="block text-[10px] text-slate-400 mb-1 uppercase">摩擦 Friction</label>
+                    <label className="block text-[10px] text-slate-400 mb-1 uppercase">摩擦系数</label>
                     <input 
                         type="number" step="0.1" min="0" max="1"
                         value={body.friction} 
                         onChange={(e) => handleChange('friction', e.target.value)}
-                        className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm focus:border-blue-500 outline-none transition"
+                        className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
                     />
                 </div>
             </div>
 
              {body.surfaceSpeed !== undefined && (
                 <div>
-                    <label className="block text-[10px] text-slate-400 mb-1 uppercase">传送带速度 Surface Speed</label>
+                    <label className="block text-[10px] text-slate-400 mb-1 uppercase">传送带速度</label>
                     <input 
                         type="number" 
                         value={body.surfaceSpeed} 
@@ -451,16 +448,28 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
 
         {/* Geometry */}
         <div className="space-y-3">
-            <h3 className="text-xs font-semibold text-slate-300 border-l-2 border-purple-500 pl-2">几何形状 (Geometry)</h3>
+            <h3 className="text-xs font-semibold text-slate-300 border-l-2 border-purple-500 pl-2">几何属性</h3>
             
+            {body.type === BodyType.LINE && (
+                <div>
+                    <label className="block text-[10px] text-slate-400 mb-1 uppercase">长度 Length</label>
+                    <input 
+                        type="number" 
+                        value={body.length} 
+                        onChange={(e) => handleChange('length', e.target.value)}
+                        className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
+                    />
+                </div>
+            )}
+
             {!body.isParticle && (body.type === BodyType.CIRCLE || body.type === BodyType.ARC) && (
                 <div>
-                    <label className="block text-[10px] text-slate-400 mb-1 uppercase">半径 Radius (m)</label>
+                    <label className="block text-[10px] text-slate-400 mb-1 uppercase">半径 Radius</label>
                     <input 
                         type="number" 
                         value={body.radius} 
                         onChange={(e) => handleChange('radius', e.target.value)}
-                        className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm focus:border-blue-500 outline-none transition"
+                        className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
                     />
                 </div>
             )}
@@ -473,7 +482,7 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
                             type="number" 
                             value={body.width} 
                             onChange={(e) => handleChange('width', e.target.value)}
-                            className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm focus:border-blue-500 outline-none transition"
+                            className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
                         />
                     </div>
                     <div>
@@ -482,14 +491,14 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
                             type="number" 
                             value={body.height} 
                             onChange={(e) => handleChange('height', e.target.value)}
-                            className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm focus:border-blue-500 outline-none transition"
+                            className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
                         />
                     </div>
                 </div>
             )}
 
             <div>
-                 <label className="block text-[10px] text-slate-400 mb-1 uppercase">位置 Position (x, y)</label>
+                 <label className="block text-[10px] text-slate-400 mb-1 uppercase">位置 (x, y)</label>
                  <div className="flex gap-2 font-mono text-xs">
                      <div className="bg-slate-900/50 text-slate-400 border border-slate-700 rounded px-2 py-1.5 flex-1">
                          X: {body.position.x.toFixed(2)}
@@ -501,12 +510,12 @@ const PropertiesPanel: React.FC<Props> = ({ body, field, constraint, onUpdateBod
             </div>
 
             <div>
-                 <label className="block text-[10px] text-slate-400 mb-1 uppercase">角度 Angle (rad)</label>
+                 <label className="block text-[10px] text-slate-400 mb-1 uppercase">角度 (deg)</label>
                  <input 
-                        type="number" step="0.1"
-                        value={body.angle} 
-                        onChange={(e) => handleChange('angle', e.target.value)}
-                        className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm focus:border-blue-500 outline-none transition"
+                        type="number"
+                        value={(body.angle * 180 / Math.PI).toFixed(1)} 
+                        onChange={(e) => handleChange('angle', parseFloat(e.target.value) * Math.PI / 180)}
+                        className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm outline-none"
                     />
             </div>
         </div>

@@ -1,5 +1,4 @@
 
-
 import { BodyType, Constraint, ConstraintType, PhysicsBody, PhysicsField, FieldType, Vector2, FieldShape } from '../types';
 import { Vec2 } from './vectorMath';
 import { CollisionSystem } from './collision';
@@ -33,6 +32,11 @@ export class PhysicsEngine {
     for(let i=0; i<bodies.length; i++) {
         const b = bodies[i];
         activeBodies[i] = { ...b, forceComponents: {} }; 
+        
+        // Update Custom Graphs
+        if (b.customGraph && b.customGraph.show) {
+            this.updateCustomGraph(activeBodies[i], dt);
+        }
     }
 
     for (let i = 0; i < subSteps; i++) {
@@ -76,6 +80,32 @@ export class PhysicsEngine {
     }
 
     return activeBodies;
+  }
+  
+  private updateCustomGraph(body: PhysicsBody, dt: number) {
+      if (!body.customGraph) return;
+      // Simple equation evaluator
+      const evalEq = (eq: string) => {
+          try {
+              // Expose vars: t, x, y, vx, vy, v, ax, ay, a, m, ke
+              const t = 0; // Relative t not tracked here, using 'push' logic
+              const x = body.position.x; const y = -body.position.y;
+              const vx = body.velocity.x; const vy = -body.velocity.y;
+              const v = Vec2.mag(body.velocity);
+              const ax = body.acceleration.x; const ay = -body.acceleration.y;
+              const a = Vec2.mag(body.acceleration);
+              const m = body.mass;
+              const ke = 0.5 * m * v * v;
+              return new Function('x','y','vx','vy','v','ax','ay','a','m','ke', `with(Math){ return ${eq} }`)(x,y,vx,vy,v,ax,ay,a,m,ke);
+          } catch(e) { return 0; }
+      };
+      
+      const valX = evalEq(body.customGraph.eqX);
+      const valY = evalEq(body.customGraph.eqY);
+      
+      if (!body.customGraph.data) body.customGraph.data = [];
+      body.customGraph.data.push({x: valX, y: valY});
+      if (body.customGraph.data.length > 500) body.customGraph.data.shift();
   }
 
   private addForceComponent(body: PhysicsBody, name: string, force: Vector2) {
@@ -571,6 +601,7 @@ export class PhysicsEngine {
           return {
               ...body,
               id: body.id + idSuffix,
+              label: body.label + idSuffix,
               type: BodyType.POLYGON,
               position: center,
               vertices: localVs,

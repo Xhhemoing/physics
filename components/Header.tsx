@@ -28,7 +28,7 @@ export const Header: React.FC<HeaderProps> = ({
       <header className="h-12 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-4 z-20">
         <div className="flex items-center space-x-2">
             <Activity className="text-blue-500" />
-            <h1 className="font-bold text-lg tracking-tight bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent hidden md:block">PhysLab Pro</h1>
+            <h1 className="font-bold text-lg tracking-tight bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent hidden md:block">PhysLab Pro (CN)</h1>
             <input 
                 type="text" 
                 value={state.canvasName}
@@ -50,7 +50,7 @@ export const Header: React.FC<HeaderProps> = ({
                  <button 
                     onClick={onReset}
                     className="p-1.5 rounded-md hover:bg-slate-700 text-slate-300 transition"
-                    title="Reset Simulation"
+                    title="重置模拟"
                  >
                      <RotateCcw size={18} />
                  </button>
@@ -59,10 +59,10 @@ export const Header: React.FC<HeaderProps> = ({
              <div className="h-6 w-px bg-slate-700 mx-2" />
              
              <div className="flex items-center gap-2">
-                 <button onClick={() => setShowSnapshots(!showSnapshots)} className={`p-1.5 rounded transition ${showSnapshots ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-amber-400'}`} title="Snapshots">
+                 <button onClick={() => setShowSnapshots(!showSnapshots)} className={`p-1.5 rounded transition ${showSnapshots ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-amber-400'}`} title="快照">
                     <Timer size={18} />
                  </button>
-                 <button onClick={() => setShowSettings(!showSettings)} className={`p-1.5 rounded transition ${showSettings ? 'bg-purple-600 text-white' : 'text-slate-400 hover:text-purple-400'}`} title="Global Settings">
+                 <button onClick={() => setShowSettings(!showSettings)} className={`p-1.5 rounded transition ${showSettings ? 'bg-purple-600 text-white' : 'text-slate-400 hover:text-purple-400'}`} title="全局设置">
                     <Settings size={18} />
                  </button>
              </div>
@@ -77,13 +77,13 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         <div className="flex items-center space-x-3">
-             <button onClick={() => canvasRef.current?.exportImage()} className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white" title="Export Image">
+             <button onClick={() => canvasRef.current?.exportImage()} className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white" title="导出图片">
                  <Camera size={18} />
              </button>
-             <button onClick={onSaveScene} className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white" title="Save Scene">
+             <button onClick={onSaveScene} className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white" title="保存场景">
                  <Download size={18} />
              </button>
-             <label className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white cursor-pointer" title="Load Scene">
+             <label className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white cursor-pointer" title="导入场景">
                  <Upload size={18} />
                  <input type="file" onChange={onImportScene} className="hidden" accept=".json" />
              </label>

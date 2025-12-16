@@ -6,10 +6,10 @@ export class CollisionSystem {
   
   // General Collision Detection Dispatcher
   public detectCollision(bodyA: PhysicsBody, bodyB: PhysicsBody): { normal: Vector2, depth: number } | null {
-      // HOLLOW BODY HANDLING (Key Fix for Invisible Walls)
-      if (bodyA.isHollow || bodyB.isHollow) {
-          const hollow = bodyA.isHollow ? bodyA : bodyB;
-          const solid = bodyA.isHollow ? bodyB : bodyA;
+      // HOLLOW BODY or LINE HANDLING
+      if (bodyA.isHollow || bodyB.isHollow || bodyA.type === BodyType.LINE || bodyB.type === BodyType.LINE) {
+          const hollow = (bodyA.isHollow || bodyA.type === BodyType.LINE) ? bodyA : bodyB;
+          const solid = (bodyA.isHollow || bodyA.type === BodyType.LINE) ? bodyB : bodyA;
           
           const result = this.checkChainCollision(hollow, solid);
           if (result) {
@@ -106,8 +106,8 @@ export class CollisionSystem {
 
       // Check against all segments of the chain
       for (let i = 0; i < chainVerts.length; i++) {
-          // If not closed, skip last segment
-          if (i === chainVerts.length - 1 && !chain.isHollow) break; 
+          // If not closed, skip last segment (LINE is open, Arc is open, Polygon can be closed)
+          if (i === chainVerts.length - 1 && (chain.isHollow || chain.type === BodyType.LINE || chain.type === BodyType.ARC)) break; 
           
           const v1 = chainVerts[i];
           const v2 = chainVerts[(i + 1) % chainVerts.length];
@@ -280,6 +280,14 @@ export class CollisionSystem {
   }
 
   public getWorldVertices(body: PhysicsBody): Vector2[] {
+      if (body.type === BodyType.LINE) {
+          const halfLen = (body.length || 100) / 2;
+          const localVerts = [
+              { x: -halfLen, y: 0 },
+              { x: halfLen, y: 0 }
+          ];
+          return localVerts.map(v => Vec2.transform(v, body.position, body.angle));
+      }
       if (body.vertices) {
           return body.vertices.map(v => Vec2.transform(v, body.position, body.angle));
       }
@@ -396,8 +404,6 @@ export class CollisionSystem {
       let maxDepth = -1;
       let collisionNormal = Vec2.zero();
       
-      // Reduce effective thickness to avoid "air walls"
-      // Use 2 instead of 5 to better match visual line thickness
       const THICKNESS = 2;
 
       for (const v of verts) {
