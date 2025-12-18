@@ -1,17 +1,16 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Activity, X, Calculator, Clock, Camera, Minus, Trash2, Settings, Focus, ZoomIn, ZoomOut, Maximize, Video } from 'lucide-react';
+import { Play, Pause, RotateCcw, MousePointer2, Camera, Download, Link, Eclipse, MoveRight, Upload, Zap, Activity, Minus, Plus, Scan, Crosshair, ChevronDown, ChevronRight, Globe, Layers, Settings, Clock, Timer, Trash2, Scissors, Group, Combine, Pentagon, Calculator, X, Target, Video, Disc } from 'lucide-react';
 import SimulationCanvas, { CanvasRef } from './components/SimulationCanvas';
 import PropertiesPanel from './components/PropertiesPanel';
 import DataCharts from './components/DataCharts';
-import { Header } from './components/Header';
-import { Toolbar } from './components/Toolbar';
 import { PhysicsEngine } from './services/physicsEngine';
-import { BodyType, PhysicsBody, SimulationState, Vector2, ConstraintType, FieldType, PhysicsField, FieldShape, Constraint, PinnedChart } from './types';
+import { BodyType, PhysicsBody, SimulationState, Vector2, ConstraintType, FieldType, PhysicsField, FieldShape, Constraint } from './types';
 import { Vec2 } from './services/vectorMath';
 
+// Initial State
 const INITIAL_STATE: SimulationState = {
-  canvasName: 'Project',
+  name: "New Simulation",
   bodies: [],
   constraints: [],
   fields: [],
@@ -20,17 +19,16 @@ const INITIAL_STATE: SimulationState = {
   gravity: { x: 0, y: 10 },
   enableCoulomb: false,
   enableUniversalGravity: false,
-  enableAirResistance: false, 
+  enableAirResistance: false, // Default to false for space-like behavior
   selectedBodyId: null,
   selectedFieldId: null,
   selectedConstraintId: null,
-  camera: { x: 0, y: 0, zoom: 1, trackingBodyId: null },
-  pinnedCharts: [],
-  isRecording: false
+  trackingBodyId: null,
+  camera: { x: 0, y: 0, zoom: 1 } // Origin at top-left
 };
 
 interface ArcBuilder {
-    phase: 1 | 2 | 3; 
+    phase: 1 | 2 | 3; // 1: Center, 2: Start Point, 3: End Point
     center: Vector2;
     radius: number;
     startAngle: number;
@@ -45,389 +43,240 @@ interface RampBuilder {
 interface Snapshot {
     id: string;
     timestamp: number;
-    data: string;
+    data: string; // JSON string of state
+    thumbnail?: string;
 }
+
+// UI Helper Components
+
+const CollapsibleGroup = ({ icon, label, children, defaultOpen = false }: { icon: React.ReactNode, label: string, children?: React.ReactNode, defaultOpen?: boolean }) => {
+    const [isOpen, setIsOpen] = useState(defaultOpen);
+    return (
+        <div className="w-full px-1 mb-1">
+            <button 
+                onClick={() => setIsOpen(!isOpen)}
+                className={`flex items-center justify-between w-full p-2 rounded text-[10px] font-bold uppercase tracking-wider transition-colors ${isOpen ? 'bg-slate-800 text-slate-200' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'}`}
+            >
+                <div className="flex items-center gap-2">
+                    {icon}
+                    <span>{label}</span>
+                </div>
+                {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            </button>
+            <div className={`overflow-hidden transition-all duration-300 ${isOpen ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'}`}>
+                <div className="flex flex-col gap-1 p-1 mt-1 border-l border-slate-700 ml-2 pl-2">
+                    {children}
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const ToolBtn = ({ mode, setMode, target, icon, label }: { mode: string, setMode: (m: string) => void, target: string, icon: React.ReactNode, label: string }) => (
+    <button 
+        onClick={() => setMode(target)}
+        className={`p-1.5 w-full rounded transition flex flex-col items-center ${mode === target ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
+        title={label}
+    >
+        {icon}
+        <span className="text-[9px] mt-0.5 scale-90">{label}</span>
+    </button>
+);
+
+// SVGs for specific shapes requested
+const SquareIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="18" height="18" rx="2" /></svg>;
+const CircleIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10" /></svg>;
+const RampIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M22 20L2 20L22 4V20Z" /></svg>;
+const ParticleIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="4" /></svg>;
 
 const App: React.FC = () => {
   const [state, setState] = useState<SimulationState>(INITIAL_STATE);
   const [dragMode, setDragMode] = useState<string>('select');
-  
-  // Layout
-  const [sidebarWidth, setSidebarWidth] = useState(320);
-  const [toolbarWidth, setToolbarWidth] = useState(80);
-  
-  // Builders
   const [arcBuilder, setArcBuilder] = useState<ArcBuilder | null>(null);
   const [rampBuilder, setRampBuilder] = useState<RampBuilder | null>(null);
   const [polyBuilder, setPolyBuilder] = useState<Vector2[]>([]);
-  const [constraintBuilder, setConstraintBuilder] = useState<string | null>(null); 
-  
-  const [combineSelection, setCombineSelection] = useState<string[]>([]);
-
-  // UI State
+  const [constraintBuilder, setConstraintBuilder] = useState<string | null>(null); // Holds first body ID
+  const [pinnedBodyId, setPinnedBodyId] = useState<string | null>(null);
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [showSnapshots, setShowSnapshots] = useState(false);
   const [showGlobalSettings, setShowGlobalSettings] = useState(false);
+  const [combineSelection, setCombineSelection] = useState<string[]>([]);
+  
+  // Recording
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+
+  // Equation Builder State
   const [showEquationBuilder, setShowEquationBuilder] = useState(false);
   const [eqParams, setEqParams] = useState({ x: "100 * Math.cos(t)", y: "100 * Math.sin(t)", tStart: 0, tEnd: 6.28, steps: 100, isHollow: true });
 
   const engineRef = useRef(new PhysicsEngine());
   const canvasRef = useRef<CanvasRef>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const reqRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
 
-  // --- Animation Loop ---
+  // Animation Loop
   const tick = useCallback((time: number) => {
     if (!lastTimeRef.current) lastTimeRef.current = time;
-    const dt = Math.min((time - lastTimeRef.current) / 1000, 0.05); 
+    const dt = Math.min((time - lastTimeRef.current) / 1000, 0.05); // Cap dt for stability
     lastTimeRef.current = time;
 
-    setState(prev => {
-      // 1. Physics Step
-      let nextState = { ...prev };
-      
-      if (!prev.paused) {
-          const newBodies = engineRef.current.step(
-              dt, 
-              prev.bodies, 
-              prev.constraints, 
-              prev.fields, 
-              prev.gravity, 
-              prev.enableCoulomb,
-              prev.enableUniversalGravity,
-              prev.enableAirResistance
-          );
-          
-          // Update Trails
-          newBodies.forEach(b => {
-              if (b.showTrajectory) {
-                  if (!b.trail) b.trail = [];
-                  // Optimize trail density
-                  const last = b.trail[b.trail.length - 1];
-                  if (!last || Vec2.magSq(Vec2.sub(last, b.position)) > 100) { 
-                      b.trail.push({ ...b.position });
-                      if (b.trail.length > 200) b.trail.shift();
-                  }
-              }
-          });
-          nextState.bodies = newBodies;
-          nextState.time = prev.time + dt;
-      }
+    if (!state.paused) {
+      setState(prev => {
+        const newBodies = engineRef.current.step(
+            dt, 
+            prev.bodies, 
+            prev.constraints, 
+            prev.fields, 
+            prev.gravity, 
+            prev.enableCoulomb,
+            prev.enableUniversalGravity,
+            prev.enableAirResistance
+        );
+        
+        // Update Trails
+        newBodies.forEach(b => {
+            if (b.showTrajectory) {
+                if (!b.trail) b.trail = [];
+                const last = b.trail[b.trail.length - 1];
+                if (!last || Vec2.magSq(Vec2.sub(last, b.position)) > 4) {
+                    b.trail.push({ ...b.position });
+                    if (b.trail.length > 500) b.trail.shift();
+                }
+            }
+        });
+        
+        let newCamera = prev.camera;
+        if (prev.trackingBodyId) {
+            const tracked = newBodies.find(b => b.id === prev.trackingBodyId);
+            if (tracked) {
+                 const cx = window.innerWidth / 2; 
+                 const cy = window.innerHeight / 2;
+                 newCamera = {
+                     ...prev.camera,
+                     x: cx - tracked.position.x * prev.camera.zoom,
+                     y: cy - tracked.position.y * prev.camera.zoom
+                 };
+            }
+        }
 
-      // 2. Camera Tracking
-      if (nextState.camera.trackingBodyId) {
-          const target = nextState.bodies.find(b => b.id === nextState.camera.trackingBodyId);
-          if (target) {
-             const centerX = window.innerWidth / 2;
-             const centerY = window.innerHeight / 2;
-             const targetCamX = centerX - target.position.x * nextState.camera.zoom;
-             const targetCamY = centerY - target.position.y * nextState.camera.zoom;
-             nextState.camera = {
-                 ...nextState.camera,
-                 x: nextState.camera.x + (targetCamX - nextState.camera.x) * 0.1,
-                 y: nextState.camera.y + (targetCamY - nextState.camera.y) * 0.1
-             };
-          }
-      }
-
-      return nextState;
-    });
+        return {
+          ...prev,
+          bodies: newBodies,
+          time: prev.time + dt,
+          camera: newCamera
+        };
+      });
+    }
 
     reqRef.current = requestAnimationFrame(tick);
-  }, []);
+  }, [state.paused]);
 
   useEffect(() => {
     reqRef.current = requestAnimationFrame(tick);
-    return () => { if (reqRef.current) cancelAnimationFrame(reqRef.current); };
+    return () => {
+      if (reqRef.current) cancelAnimationFrame(reqRef.current);
+    };
   }, [tick]);
 
-  // --- Handlers ---
+  // Handle Cut Event from Canvas
+  useEffect(() => {
+      const handleCut = (e: any) => {
+          const { p1, p2 } = e.detail;
+          if (state.selectedBodyId) {
+              const body = state.bodies.find(b => b.id === state.selectedBodyId);
+              if (body) {
+                  const parts = engineRef.current.splitBody(body, p1, p2);
+                  if (parts) {
+                      setState(s => ({
+                          ...s,
+                          bodies: [...s.bodies.filter(b => b.id !== body.id), ...parts],
+                          selectedBodyId: null
+                      }));
+                  }
+              }
+          }
+      };
+      window.addEventListener('canvas-cut', handleCut);
+      return () => window.removeEventListener('canvas-cut', handleCut);
+  }, [state.selectedBodyId, state.bodies]);
 
   const handleTogglePause = () => setState(s => ({ ...s, paused: !s.paused }));
+  const handleReset = () => setState({ ...INITIAL_STATE, camera: state.camera, name: state.name });
+  const handleResetView = () => setState(s => ({ ...s, camera: { x: 0, y: 0, zoom: 1 }, trackingBodyId: null }));
   
-  const handleReset = () => {
-      setState(s => ({ ...s, time: 0, paused: true, bodies: s.bodies.map(b => ({...b, position: b.trail?.[0] || b.position, velocity: {x:0,y:0}, angularVelocity:0})) }));
-  };
-
-  const handleClearAll = () => {
-      if(confirm("确定清空画布吗?")) {
-          setState({...INITIAL_STATE, canvasName: state.canvasName, camera: state.camera, paused: true});
-      }
-  };
-
-  const handlePreset = (type: 'smooth' | 'elastic') => {
-      setState(s => ({
-          ...s,
-          bodies: s.bodies.map(b => ({
-              ...b,
-              friction: type === 'smooth' ? 0 : 0.5,
-              restitution: type === 'elastic' ? 1.0 : b.restitution
-          }))
-      }));
-  };
-
-  const handleSaveScene = () => {
-      const data = JSON.stringify(state);
-      const blob = new Blob([data], {type: 'application/json'});
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${state.canvasName || 'scene'}.json`;
-      a.click();
-  };
-
-  const handleImportScene = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (file) {
-          const reader = new FileReader();
-          reader.onload = (ev) => {
-              try {
-                  const newState = JSON.parse(ev.target?.result as string);
-                  setState({ ...newState, paused: true });
-              } catch(err) {
-                  alert("Invalid file format");
+  const handleSelectBody = (id: string | null) => {
+      // Constraint Construction Logic
+      if (['add_spring', 'add_rod', 'add_pin', 'add_rope'].includes(dragMode) && id) {
+          if (!constraintBuilder) {
+              setConstraintBuilder(id);
+          } else if (constraintBuilder !== id) {
+              const bodyA = state.bodies.find(b => b.id === constraintBuilder);
+              const bodyB = state.bodies.find(b => b.id === id);
+              if (bodyA && bodyB) {
+                  const newConstraint: Constraint = {
+                      id: `c_${Date.now()}`,
+                      type: dragMode === 'add_spring' ? ConstraintType.SPRING 
+                          : dragMode === 'add_rod' ? ConstraintType.ROD 
+                          : dragMode === 'add_rope' ? ConstraintType.ROPE
+                          : ConstraintType.PIN,
+                      bodyAId: constraintBuilder,
+                      bodyBId: id,
+                      localAnchorA: { x: 0, y: 0 }, 
+                      localAnchorB: { x: 0, y: 0 },
+                      length: Vec2.dist(bodyA.position, bodyB.position),
+                      stiffness: 0.5,
+                      damping: 0.1
+                  };
+                  setState(s => ({ ...s, constraints: [...s.constraints, newConstraint] }));
               }
-          };
-          reader.readAsText(file);
-      }
-  };
-
-  const handleTakeSnapshot = () => {
-      const snap: Snapshot = {
-          id: `snap_${Date.now()}`,
-          timestamp: Date.now(),
-          data: JSON.stringify(state)
-      };
-      setSnapshots([snap, ...snapshots]);
-  };
-
-  const handleLoadSnapshot = (snap: Snapshot) => {
-      try {
-          const loaded = JSON.parse(snap.data);
-          setState(loaded);
-      } catch(e) {}
-  };
-
-  const handleStartRecording = () => {
-      const stream = canvasRef.current?.getStream();
-      if (stream) {
-          chunksRef.current = [];
-          const recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9', videoBitsPerSecond: 5000000 });
-          recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
-          recorder.onstop = () => {
-              const blob = new Blob(chunksRef.current, { type: 'video/webm' });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = `${state.canvasName}-recording.webm`;
-              a.click();
-          };
-          recorder.start();
-          recorderRef.current = recorder;
-          setState(s => ({ ...s, isRecording: true, paused: false }));
-      } else {
-          alert("Canvas stream unavailable");
-      }
-  };
-
-  const handleStopRecording = () => {
-      if (recorderRef.current && state.isRecording) {
-          recorderRef.current.stop();
-          setState(s => ({ ...s, isRecording: false, paused: true }));
-      }
-  };
-  
-  const handlePinChart = (bodyId: string) => {
-      setState(s => {
-          if (s.pinnedCharts.find(c => c.bodyId === bodyId)) return s;
-          const newChart: PinnedChart = {
-              id: `chart_${Date.now()}`,
-              bodyId,
-              position: { x: 100 + (s.pinnedCharts.length * 30), y: 100 + (s.pinnedCharts.length * 30) }
-          };
-          return { ...s, pinnedCharts: [...s.pinnedCharts, newChart] };
-      });
-  };
-
-  const closeChart = (id: string) => {
-      setState(s => ({ ...s, pinnedCharts: s.pinnedCharts.filter(c => c.id !== id) }));
-  };
-
-  const updateChartPosition = (id: string, x: number, y: number) => {
-      setState(s => ({
-          ...s,
-          pinnedCharts: s.pinnedCharts.map(c => c.id === id ? { ...c, position: { x, y } } : c)
-      }));
-  };
-
-  const handleCreateEquationBody = () => {
-      try {
-          const points: Vector2[] = [];
-          const step = (eqParams.tEnd - eqParams.tStart) / eqParams.steps;
-          for(let t = eqParams.tStart; t <= eqParams.tEnd; t += step) {
-              const x = new Function('t', `with(Math){ return ${eqParams.x} }`)(t);
-              const y = new Function('t', `with(Math){ return ${eqParams.y} }`)(t);
-              points.push({x, y});
+              setConstraintBuilder(null);
+              setDragMode('select');
           }
-
-          let cx = 0, cy = 0; points.forEach(p => { cx+=p.x; cy+=p.y; });
-          cx/=points.length; cy/=points.length;
-          const center = {x:cx, y:cy};
-          const localVerts = points.map(p => ({x: p.x - cx, y: p.y - cy}));
-          
-          const newBody: PhysicsBody = {
-              id: `eq_${Date.now()}`,
-              label: `E${state.bodies.length+1}`,
-              type: BodyType.POLYGON,
-              position: center,
-              velocity: {x:0, y:0}, acceleration: {x:0, y:0}, force: {x:0, y:0}, constantForce: {x:0, y:0},
-              mass: 0, inverseMass: 0, restitution: 0.5, friction: 0.5, charge: 0,
-              angle: 0, angularVelocity: 0, momentInertia: 0, inverseInertia: 0,
-              vertices: localVerts,
-              isHollow: eqParams.isHollow,
-              color: '#10b981', selected: true, showTrajectory: false, trail: []
-          };
-          
-          setState(s => ({ ...s, bodies: [...s.bodies, newBody], selectedBodyId: newBody.id }));
-          setShowEquationBuilder(false);
-      } catch(e) {
-          alert("方程错误");
+          return;
       }
+      
+      // Combine Tool Selection Logic
+      if (dragMode === 'tool_combine' && id) {
+          if (!combineSelection.includes(id)) {
+              setCombineSelection([...combineSelection, id]);
+          }
+          if (combineSelection.length >= 1 && !combineSelection.includes(id)) {
+              const firstId = combineSelection[0];
+              const secondId = id;
+              handleCombineBodies(firstId, secondId);
+              setCombineSelection([]);
+              setDragMode('select');
+          }
+          return;
+      }
+
+      if (dragMode === 'tool_cut' && id) {
+          setState(s => ({ ...s, selectedBodyId: id }));
+          return;
+      }
+
+      if (dragMode === 'tool_traj' && id) {
+          setState(s => ({
+              ...s,
+              bodies: s.bodies.map(b => b.id === id ? { ...b, showTrajectory: !b.showTrajectory } : b)
+          }));
+          return;
+      }
+
+      setState(s => ({ ...s, selectedBodyId: id, selectedFieldId: null, selectedConstraintId: null }));
   };
 
-  // --- Building Logic ---
-  const handleAddBody = (pos: Vector2) => {
-    // Ramp Builder
-    if (dragMode === 'add_ramp' || dragMode === 'add_conveyor') {
-        if (!rampBuilder) {
-            setRampBuilder({ start: pos, isConveyor: dragMode === 'add_conveyor' });
-        } else {
-            const start = rampBuilder.start; 
-            const delta = Vec2.sub(pos, start);
-            const len = Vec2.mag(delta);
-            let angle = Math.atan2(delta.y, delta.x);
-            // Snap Angle (Relaxed: only if close to 15 deg steps)
-            const deg = angle * (180/Math.PI);
-            const snappedDeg = Math.round(deg / 15) * 15;
-            if (Math.abs(deg - snappedDeg) < 5) {
-                angle = snappedDeg * (Math.PI/180);
-            }
-            
-            const snappedEnd = { x: start.x + len * Math.cos(angle), y: start.y + len * Math.sin(angle) };
-            const center = Vec2.mul(Vec2.add(start, snappedEnd), 0.5);
-
-            const newBody: PhysicsBody = {
-                id: `ramp_${Date.now()}`,
-                label: `R${state.bodies.length+1}`,
-                type: BodyType.LINE,
-                position: center,
-                velocity: {x:0, y:0}, acceleration: {x:0, y:0}, force: {x:0, y:0}, constantForce: {x:0, y:0},
-                mass: 0, inverseMass: 0, restitution: 0.5, friction: 0.5, charge: 0,
-                angle: angle, angularVelocity: 0, momentInertia: 0, inverseInertia: 0,
-                length: len,
-                color: rampBuilder.isConveyor ? '#8b5cf6' : '#64748b', 
-                selected: true, showTrajectory: false, trail: []
-            };
-            if (rampBuilder.isConveyor) { newBody.surfaceSpeed = 50; }
-            setState(s => ({ ...s, bodies: [...s.bodies, newBody], selectedBodyId: newBody.id }));
-            setRampBuilder(null); setDragMode('select');
-        }
-        return;
-    }
-    
-    // Poly Builder
-    if (dragMode === 'add_poly') {
-        if (polyBuilder.length > 0 && Vec2.dist(pos, polyBuilder[0]) < 20) {
-             if (polyBuilder.length < 3) return; 
-             // Finish Poly
-             let cx = 0, cy = 0; polyBuilder.forEach(v => { cx += v.x; cy += v.y; });
-             cx /= polyBuilder.length; cy /= polyBuilder.length;
-             const center = { x: cx, y: cy };
-             const localVerts = polyBuilder.map(v => ({ x: v.x - center.x, y: v.y - center.y }));
-             const newBody: PhysicsBody = {
-                 id: `poly_${Date.now()}`,
-                 label: `P${state.bodies.length+1}`,
-                 type: BodyType.POLYGON,
-                 position: center,
-                 velocity: {x:0, y:0}, acceleration: {x:0, y:0}, force: {x:0, y:0}, constantForce: {x:0, y:0},
-                 mass: 5, inverseMass: 0.2, restitution: 0.5, friction: 0.5, charge: 0,
-                 angle: 0, angularVelocity: 0, momentInertia: 100, inverseInertia: 0.01,
-                 vertices: localVerts, color: '#14b8a6', selected: true, showTrajectory: false, trail: []
-             };
-             setState(s => ({ ...s, bodies: [...s.bodies, newBody], selectedBodyId: newBody.id }));
-             setPolyBuilder([]); setDragMode('select');
-        } else {
-             setPolyBuilder([...polyBuilder, pos]);
-        }
-        return;
-    }
-
-    // Arc Builder
-    if (dragMode === 'add_arc') {
-        if (!arcBuilder) {
-            setArcBuilder({ phase: 1, center: pos, radius: 0, startAngle: 0, endAngle: 0 });
-        } else if (arcBuilder.phase === 1) {
-            const r = Vec2.dist(arcBuilder.center, pos);
-            const angle = Math.atan2(pos.y - arcBuilder.center.y, pos.x - arcBuilder.center.x);
-            setArcBuilder({ ...arcBuilder, phase: 2, radius: r, startAngle: angle, endAngle: 0 });
-        } else if (arcBuilder.phase === 2) {
-             const angle = Math.atan2(pos.y - arcBuilder.center.y, pos.x - arcBuilder.center.x);
-             let endAngle = angle;
-             if (Math.abs(angle - arcBuilder.startAngle) < 0.1) endAngle = arcBuilder.startAngle + Math.PI*1.99;
-             
-             const newBody: PhysicsBody = {
-                id: `arc_${Date.now()}`,
-                label: `A${state.bodies.length+1}`,
-                type: BodyType.ARC,
-                position: arcBuilder.center,
-                velocity: {x:0, y:0}, acceleration: {x:0, y:0}, force: {x:0, y:0}, constantForce: {x:0, y:0},
-                mass: 0, inverseMass: 0, restitution: 1.0, friction: 0.5, charge: 0,
-                angle: 0, angularVelocity: 0, momentInertia: 0, inverseInertia: 0,
-                radius: arcBuilder.radius, arcStartAngle: arcBuilder.startAngle, arcEndAngle: endAngle,
-                color: '#e2e8f0', selected: true, showTrajectory: false, trail: [], isHollow: true
-            };
-            setState(s => ({ ...s, bodies: [...s.bodies, newBody], selectedBodyId: newBody.id }));
-            setArcBuilder(null); setDragMode('select');
-        }
-        return;
-    }
-    
-    // Normal Bodies
-    if (dragMode.startsWith('add_') && !['add_spring', 'add_rod', 'add_pin', 'add_rope'].includes(dragMode)) {
-        const newId = `body_${Date.now()}`;
-        const count = state.bodies.length + 1;
-        let newBody: PhysicsBody = {
-            id: newId,
-            label: `B${count}`,
-            type: BodyType.CIRCLE,
-            position: pos,
-            velocity: {x: 0, y: 0}, acceleration: {x:0, y:0}, force: {x:0, y:0}, constantForce: {x:0, y:0},
-            mass: 5, inverseMass: 0.2, restitution: 0.8, friction: 0.4, charge: 0,
-            angle: 0, angularVelocity: 0, momentInertia: 50, inverseInertia: 0.02,
-            color: '#ec4899', selected: true, showTrajectory: false, trail: [],
-            showVelocity: false, showForce: false, showAcceleration: false, showCharge: false,
-            customGraph: { show: false, eqX: 't', eqY: 'v', color: '#ff00ff', data: [] }
-        };
-        if (dragMode === 'add_box') { newBody.type = BodyType.BOX; newBody.width = 40; newBody.height = 40; newBody.color = '#3b82f6'; }
-        if (dragMode === 'add_particle') { newBody.isParticle = true; newBody.radius = 5; newBody.mass = 1; newBody.inverseMass = 1; newBody.color = '#facc15'; }
-        else { newBody.radius = 20; }
-        
-        setState(s => ({ ...s, bodies: [...s.bodies, newBody], selectedBodyId: newId }));
-        setDragMode('select');
-    }
-  };
-  
   const handleCombineBodies = (id1: string, id2: string) => {
-      // ... existing logic ...
       const b1 = state.bodies.find(b => b.id === id1);
       const b2 = state.bodies.find(b => b.id === id2);
       if (!b1 || !b2) return;
       
       const getVerts = (b: PhysicsBody) => {
           if (b.type === BodyType.CIRCLE) {
-               const steps = 12;
+               const steps = 16;
                const vs = [];
                for(let i=0; i<steps; i++) {
                    const a = (i/steps) * Math.PI*2;
@@ -446,23 +295,28 @@ const App: React.FC = () => {
       const allVerts = [...getVerts(b1), ...getVerts(b2)];
       const hull = Vec2.convexHull(allVerts);
       
-      let cx = 0, cy = 0; hull.forEach(v => { cx += v.x; cy += v.y; });
+      let cx = 0, cy = 0;
+      hull.forEach(v => { cx += v.x; cy += v.y; });
       cx /= hull.length; cy /= hull.length;
       const center = { x: cx, y: cy };
+      
       const localVerts = hull.map(v => ({ x: v.x - center.x, y: v.y - center.y }));
       
       const newBody: PhysicsBody = {
           id: `combined_${Date.now()}`,
-          label: `C${state.bodies.length}`,
           type: BodyType.POLYGON,
           position: center,
           velocity: Vec2.div(Vec2.add(b1.velocity, b2.velocity), 2),
           acceleration: {x:0, y:0}, force: {x:0, y:0}, constantForce: {x:0, y:0},
-          mass: b1.mass + b2.mass, inverseMass: 1 / (b1.mass + b2.mass || 1),
-          restitution: (b1.restitution + b2.restitution)/2, friction: (b1.friction + b2.friction)/2,
+          mass: b1.mass + b2.mass,
+          inverseMass: 1 / (b1.mass + b2.mass || 1),
+          restitution: (b1.restitution + b2.restitution)/2,
+          friction: (b1.friction + b2.friction)/2,
           charge: b1.charge + b2.charge,
           angle: 0, angularVelocity: 0, momentInertia: 100, inverseInertia: 0.01,
-          vertices: localVerts, color: b1.color, selected: true, showTrajectory: false, trail: []
+          vertices: localVerts,
+          color: b1.color,
+          selected: true, showTrajectory: false, trail: []
       };
 
       setState(s => ({
@@ -473,289 +327,784 @@ const App: React.FC = () => {
       }));
   };
 
-  const handleMoveBody = (id: string, pos: Vector2) => {
+  const handleSelectField = (id: string | null) => {
+      setState(s => ({ ...s, selectedFieldId: id, selectedBodyId: null, selectedConstraintId: null }));
+  };
+  
+  const handleSelectConstraint = (id: string | null) => {
+      setState(s => ({ ...s, selectedConstraintId: id, selectedBodyId: null, selectedFieldId: null }));
+  };
+
+  const handleZoom = (deltaY: number, mouseX: number, mouseY: number) => {
       setState(s => {
-         const body = s.bodies.find(b => b.id === id);
-         if (!body) return s;
-         return { 
-             ...s, 
-             bodies: s.bodies.map(b => b.id === id ? { 
-                 ...b, 
-                 position: pos, 
-                 velocity: {x:0,y:0}, 
-                 force: {x:0,y:0} 
-             } : b) 
-         };
+          const scale = deltaY > 0 ? 0.9 : 1.1;
+          const newZoom = Math.max(0.01, Math.min(20, s.camera.zoom * scale)); 
+          const worldMouseX = (mouseX - s.camera.x) / s.camera.zoom;
+          const worldMouseY = (mouseY - s.camera.y) / s.camera.zoom;
+          const newCamX = mouseX - worldMouseX * newZoom;
+          const newCamY = mouseY - worldMouseY * newZoom;
+          return { ...s, camera: { x: newCamX, y: newCamY, zoom: newZoom } };
       });
+  };
+
+  const setZoom = (z: number) => {
+      setState(s => {
+          const newZoom = Math.max(0.01, Math.min(20, z));
+          const cx = window.innerWidth / 2; const cy = window.innerHeight / 2;
+          const worldCx = (cx - s.camera.x) / s.camera.zoom; const worldCy = (cy - s.camera.y) / s.camera.zoom;
+          const newCamX = cx - worldCx * newZoom; const newCamY = cy - worldCy * newZoom;
+          return { ...s, camera: { ...s.camera, x: newCamX, y: newCamY, zoom: newZoom } };
+      });
+  };
+
+  const handleBodyMove = (id: string, pos: Vector2) => {
+      setState(s => ({
+          ...s,
+          bodies: s.bodies.map(b => b.id === id ? { ...b, position: pos, velocity: { x: 0, y: 0 }, angularVelocity: 0, trail: [] } : b)
+      }));
+  };
+
+  const handleVectorEdit = (id: string, type: 'velocity' | 'force', vector: Vector2) => {
+      setState(s => ({
+          ...s,
+          bodies: s.bodies.map(b => b.id === id ? (type === 'velocity' ? { ...b, velocity: vector } : { ...b, constantForce: vector }) : b)
+      }));
+  };
+
+  const handleAddField = (pos: Vector2, shape: FieldShape, vertices?: Vector2[]) => {
+      const newField: PhysicsField = {
+          id: `field_${Date.now()}`,
+          type: FieldType.UNIFORM_ELECTRIC, // Default
+          shape: shape,
+          position: pos,
+          size: vertices && vertices.length === 1 ? vertices[0] : {x: 200, y: 200}, // Vertices[0] carries size for box
+          radius: vertices && vertices.length === 1 ? vertices[0].x : 100, // Vertices[0].x carries radius for circle
+          vertices: shape === FieldShape.POLYGON ? vertices : undefined,
+          strength: { x: 10, y: 0 },
+          equations: { ex: "Math.sin(x/50) * 50", ey: "0" }, 
+          visible: true
+      };
+
+      setState(s => ({
+          ...s,
+          fields: [newField, ...s.fields], 
+          selectedFieldId: newField.id,
+          selectedBodyId: null,
+          selectedConstraintId: null
+      }));
+      setDragMode('select');
+  };
+
+  const handleAddBody = (pos: Vector2) => {
+    if (dragMode === 'add_ramp' || dragMode === 'add_conveyor') {
+        if (!rampBuilder) {
+            setRampBuilder({ start: pos, isConveyor: dragMode === 'add_conveyor' });
+        } else {
+            const start = rampBuilder.start; const end = pos; 
+            const center = Vec2.mul(Vec2.add(start, end), 0.5);
+            const delta = Vec2.sub(end, start);
+            const length = Vec2.mag(delta);
+            const angle = Math.atan2(delta.y, delta.x);
+
+            const newBody: PhysicsBody = {
+                id: `ramp_${Date.now()}`,
+                type: BodyType.BOX,
+                position: center,
+                velocity: {x:0, y:0}, acceleration: {x:0, y:0}, force: {x:0, y:0}, constantForce: {x:0, y:0},
+                mass: 0, inverseMass: 0, restitution: 1.0, friction: 0.5, charge: 0,
+                angle: angle, angularVelocity: 0, momentInertia: 0, inverseInertia: 0,
+                width: length,
+                height: 5, 
+                color: rampBuilder.isConveyor ? '#8b5cf6' : '#94a3b8', 
+                selected: true, showTrajectory: false, trail: [],
+                showCharge: true
+            };
+            if (rampBuilder.isConveyor) { newBody.surfaceSpeed = 50; newBody.height = 10; }
+            setState(s => ({ ...s, bodies: [...s.bodies, newBody], selectedBodyId: newBody.id }));
+            setRampBuilder(null); setDragMode('select');
+        }
+        return;
+    }
+
+    if (dragMode === 'add_poly') {
+        if (polyBuilder.length > 0 && Vec2.dist(pos, polyBuilder[0]) < 20) {
+             if (polyBuilder.length < 3) return; 
+             let cx = 0, cy = 0; polyBuilder.forEach(v => { cx += v.x; cy += v.y; });
+             cx /= polyBuilder.length; cy /= polyBuilder.length;
+             const center = { x: cx, y: cy };
+             const localVerts = polyBuilder.map(v => ({ x: v.x - center.x, y: v.y - center.y }));
+             const newBody: PhysicsBody = {
+                 id: `poly_${Date.now()}`,
+                 type: BodyType.POLYGON,
+                 position: center,
+                 velocity: {x:0, y:0}, acceleration: {x:0, y:0}, force: {x:0, y:0}, constantForce: {x:0, y:0},
+                 mass: 5, inverseMass: 0.2, restitution: 0.5, friction: 0.5, charge: 0,
+                 angle: 0, angularVelocity: 0, momentInertia: 100, inverseInertia: 0.01,
+                 vertices: localVerts, color: '#14b8a6', selected: true, showTrajectory: false, trail: []
+             };
+             setState(s => ({ ...s, bodies: [...s.bodies, newBody], selectedBodyId: newBody.id }));
+             setPolyBuilder([]); setDragMode('select');
+        } else { setPolyBuilder([...polyBuilder, pos]); }
+        return;
+    }
+
+    if (dragMode === 'add_arc') {
+        if (!arcBuilder) {
+            setArcBuilder({ phase: 1, center: pos, radius: 0, startAngle: 0, endAngle: 0 });
+        } else if (arcBuilder.phase === 1) {
+            const r = Vec2.dist(arcBuilder.center, pos);
+            const angle = Math.atan2(pos.y - arcBuilder.center.y, pos.x - arcBuilder.center.x);
+            setArcBuilder({ ...arcBuilder, phase: 2, radius: r, startAngle: angle, endAngle: 0 });
+        } else if (arcBuilder.phase === 2) {
+             const angle = Math.atan2(pos.y - arcBuilder.center.y, pos.x - arcBuilder.center.x);
+             const r = Vec2.dist(arcBuilder.center, pos);
+             setArcBuilder({ ...arcBuilder, phase: 3, radius: r, startAngle: angle, endAngle: 0 });
+        } else if (arcBuilder.phase === 3) {
+            let endAngle = Math.atan2(pos.y - arcBuilder.center.y, pos.x - arcBuilder.center.x);
+            const startPoint = { x: arcBuilder.center.x + Math.cos(arcBuilder.startAngle)*arcBuilder.radius, y: arcBuilder.center.y + Math.sin(arcBuilder.startAngle)*arcBuilder.radius };
+            if (Vec2.dist(pos, startPoint) < 20) { endAngle = arcBuilder.startAngle + 2 * Math.PI - 0.01; } 
+            
+            const newBody: PhysicsBody = {
+                id: `arc_${Date.now()}`,
+                type: BodyType.ARC,
+                position: arcBuilder.center,
+                velocity: {x:0, y:0}, acceleration: {x:0, y:0}, force: {x:0, y:0}, constantForce: {x:0, y:0},
+                mass: 0, inverseMass: 0, restitution: 1.0, friction: 0.5, charge: 0,
+                angle: 0, angularVelocity: 0, momentInertia: 0, inverseInertia: 0,
+                radius: arcBuilder.radius, arcStartAngle: arcBuilder.startAngle, arcEndAngle: endAngle,
+                color: '#e2e8f0', selected: true, showTrajectory: false, trail: [], showCharge: true
+            };
+            setState(s => ({ ...s, bodies: [...s.bodies, newBody], selectedBodyId: newBody.id }));
+            setArcBuilder(null); setDragMode('select');
+        }
+        return;
+    }
+
+    if (dragMode === 'add_spring' || dragMode === 'add_rod' || dragMode === 'add_pin' || dragMode === 'add_rope') return;
+    if (dragMode.startsWith('tool_') || dragMode.startsWith('add_field_') || dragMode === 'select_nodrag') return;
+
+    const newId = `body_${Date.now()}`;
+    let newBody: PhysicsBody = {
+        id: newId,
+        type: BodyType.CIRCLE,
+        position: pos,
+        velocity: {x: 0, y: 0}, acceleration: {x:0, y:0}, force: {x:0, y:0}, constantForce: {x:0, y:0},
+        mass: 5, inverseMass: 0.2, restitution: 1.0, friction: 0.4, charge: 0,
+        angle: 0, angularVelocity: 0, momentInertia: 50, inverseInertia: 0.02,
+        color: '#ec4899', selected: true, showTrajectory: false, trail: [],
+        showVelocity: false, showAcceleration: false, showForce: false, showCharge: true
+    };
+
+    if (dragMode === 'add_box') {
+        newBody.type = BodyType.BOX; newBody.width = 40; newBody.height = 40; newBody.color = '#3b82f6';
+    } else if (dragMode === 'add_particle') {
+        newBody.isParticle = true; newBody.radius = 5; newBody.mass = 1; newBody.inverseMass = 1; newBody.color = '#facc15';
+    } else { newBody.radius = 20; }
+    
+    setState(s => ({ ...s, bodies: [...s.bodies, newBody], selectedBodyId: newId }));
+    setDragMode('select'); 
+  };
+
+  const handleUpdateBody = (id: string, updates: Partial<PhysicsBody>) => {
+    setState(s => ({ ...s, bodies: s.bodies.map(b => b.id === id ? { ...b, ...updates } : b) }));
+  };
+
+  const handleUpdateField = (id: string, updates: Partial<PhysicsField>) => {
+      setState(s => ({ ...s, fields: s.fields.map(f => f.id === id ? { ...f, ...updates } : f) }));
+  };
+  
+  const handleUpdateConstraint = (id: string, updates: Partial<Constraint>) => {
+      setState(s => ({ ...s, constraints: s.constraints.map(c => c.id === id ? { ...c, ...updates } : c) }));
+  };
+
+  const handleDeleteBody = (id: string) => {
+    setState(s => ({ ...s, bodies: s.bodies.filter(b => b.id !== id), constraints: s.constraints.filter(c => c.bodyAId !== id && c.bodyBId !== id), selectedBodyId: s.selectedBodyId === id ? null : s.selectedBodyId }));
+    if (pinnedBodyId === id) setPinnedBodyId(null);
+  };
+
+  const handleDeleteField = (id: string) => {
+      setState(s => ({ ...s, fields: s.fields.filter(f => f.id !== id), selectedFieldId: s.selectedFieldId === id ? null : s.selectedFieldId }));
+  };
+  
+  const handleDeleteConstraint = (id: string) => {
+      setState(s => ({ ...s, constraints: s.constraints.filter(c => c.id !== id), selectedConstraintId: s.selectedConstraintId === id ? null : s.selectedConstraintId }));
+  };
+
+  const handleSaveScene = () => {
+      const sceneData = {
+          ...state,
+          snapshots: snapshots // Export snapshots as well
+      };
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(sceneData));
+      const downloadAnchorNode = document.createElement('a');
+      downloadAnchorNode.setAttribute("href", dataStr);
+      downloadAnchorNode.setAttribute("download", `${state.name || "physlab_scene"}.json`);
+      document.body.appendChild(downloadAnchorNode);
+      downloadAnchorNode.click();
+      downloadAnchorNode.remove();
+  };
+
+  const handleImportScene = (event: React.ChangeEvent<HTMLInputElement>) => {
+      const fileReader = new FileReader();
+      if (event.target.files && event.target.files.length > 0) {
+          fileReader.readAsText(event.target.files[0], "UTF-8");
+          fileReader.onload = e => {
+              if (e.target?.result) {
+                  try {
+                      const parsed = JSON.parse(e.target.result as string);
+                      if (parsed.bodies && parsed.camera) { 
+                          if (parsed.snapshots) {
+                              setSnapshots(parsed.snapshots);
+                          } else {
+                              setSnapshots([]);
+                          }
+                          // Completely reset state
+                          setState({
+                              ...INITIAL_STATE,
+                              ...parsed,
+                              paused: true 
+                          });
+                      } else { 
+                          alert("无效的场景文件"); 
+                      }
+                  } catch (err) { alert("JSON 解析错误"); }
+              }
+          };
+          // Reset file input so onChange triggers again for same file
+          event.target.value = '';
+      }
+  };
+
+  const createSnapshot = () => {
+      const snap: Snapshot = { id: `snap_${Date.now()}`, timestamp: state.time, data: JSON.stringify(state) };
+      setSnapshots([snap, ...snapshots]);
+  };
+
+  const restoreSnapshot = (snap: Snapshot) => {
+      try { const loaded = JSON.parse(snap.data); setState({ ...loaded, paused: true }); } catch (e) { console.error(e); }
+  };
+
+  const setPreset = (type: 'smooth' | 'elastic') => {
+      setState(s => ({ ...s, bodies: s.bodies.map(b => { 
+          if (type === 'smooth') return { ...b, friction: 0 }; 
+          if (type === 'elastic') return { ...b, restitution: 1.0 }; 
+          return b; 
+      }) }));
+  };
+
+  const clearAll = () => {
+      if (confirm("确定要清空所有对象吗?")) { setState({ ...INITIAL_STATE, camera: state.camera, paused: true, name: state.name }); setPinnedBodyId(null); setSnapshots([]); }
+  };
+
+  const toggleRecording = () => {
+      if (isRecording) {
+          mediaRecorderRef.current?.stop();
+          setIsRecording(false);
+      } else {
+          const canvas = document.querySelector('canvas');
+          if (!canvas) return;
+          const stream = canvas.captureStream(60);
+          const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+          
+          recorder.ondataavailable = (e) => {
+              if (e.data.size > 0) recordedChunksRef.current.push(e.data);
+          };
+          
+          recorder.onstop = () => {
+              const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `${state.name || 'simulation'}_record.webm`;
+              a.click();
+              recordedChunksRef.current = [];
+          };
+
+          recorder.start();
+          setIsRecording(true);
+      }
+  };
+  
+  const handleGenerateEquationBody = () => {
+      try {
+          const fx = new Function('t', `with(Math){ return ${eqParams.x} }`);
+          const fy = new Function('t', `with(Math){ return ${eqParams.y} }`);
+          const points: Vector2[] = [];
+          const step = (eqParams.tEnd - eqParams.tStart) / Math.max(3, eqParams.steps);
+          
+          for(let t = eqParams.tStart; t <= eqParams.tEnd; t += step) {
+              points.push({ x: fx(t), y: fy(t) });
+          }
+          
+          let cx = 0, cy = 0; points.forEach(p => { cx += p.x; cy += p.y; });
+          cx /= points.length; cy /= points.length;
+          const center = {x: cx, y: cy};
+          // Localize
+          const localVerts = points.map(p => ({ x: p.x - center.x, y: p.y - center.y }));
+
+          const mass = eqParams.isHollow ? 0 : 5;
+          const invMass = mass === 0 ? 0 : 1/mass;
+
+          const newBody: PhysicsBody = {
+             id: `eq_poly_${Date.now()}`,
+             type: BodyType.POLYGON,
+             position: center,
+             velocity: {x:0, y:0}, acceleration: {x:0, y:0}, force: {x:0, y:0}, constantForce: {x:0, y:0},
+             mass: mass, inverseMass: invMass, restitution: 0.5, friction: 0.5, charge: 0,
+             angle: 0, angularVelocity: 0, momentInertia: 100, inverseInertia: 0.01,
+             vertices: localVerts, color: eqParams.isHollow ? '#f59e0b' : '#14b8a6', 
+             selected: true, showTrajectory: false, trail: [],
+             isHollow: eqParams.isHollow
+          };
+          setState(s => ({ ...s, bodies: [...s.bodies, newBody], selectedBodyId: newBody.id }));
+          setShowEquationBuilder(false);
+      } catch (e) {
+          alert("方程错误: " + e);
+      }
+  };
+
+  const formatTime = (t: number) => {
+      const min = Math.floor(t / 60); const sec = Math.floor(t % 60); const ms = Math.floor((t * 100) % 100);
+      return `${min.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}:${ms.toString().padStart(2, '0')}`;
   };
 
   return (
     <div className="w-full h-screen flex flex-col bg-slate-950 text-slate-200 overflow-hidden font-sans">
-      <Header 
-          state={state}
-          onTogglePause={handleTogglePause}
-          onReset={handleReset}
-          onClearAll={handleClearAll}
-          onPreset={handlePreset}
-          onSaveScene={handleSaveScene}
-          onImportScene={handleImportScene}
-          canvasRef={canvasRef}
-          showSnapshots={showSnapshots}
-          setShowSnapshots={setShowSnapshots}
-          showSettings={showGlobalSettings}
-          setShowSettings={setShowGlobalSettings}
-          onChangeName={(n) => setState(s => ({...s, canvasName: n}))}
-      />
-
-      <div className="flex-1 flex overflow-hidden relative">
-          {/* Resizable Toolbar */}
-          <div className="relative z-20 flex flex-col" style={{ width: toolbarWidth }}>
-             <Toolbar 
-                dragMode={dragMode}
-                setDragMode={setDragMode}
-                setPolyBuilder={setPolyBuilder}
-                setArcBuilder={setArcBuilder}
-                setRampBuilder={setRampBuilder}
-                setCombineSelection={setCombineSelection}
-                setShowEquationBuilder={setShowEquationBuilder}
-            />
-            {/* Toolbar Resizer */}
-            <div 
-                  className="w-1 cursor-col-resize hover:bg-blue-500 bg-slate-800 transition-colors absolute right-0 top-0 bottom-0 z-50"
-                  onMouseDown={(e) => {
-                      const startX = e.clientX;
-                      const startW = toolbarWidth;
-                      const onMove = (ev: MouseEvent) => setToolbarWidth(Math.max(60, Math.min(200, startW + (ev.clientX - startX))));
-                      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
-                      document.addEventListener('mousemove', onMove);
-                      document.addEventListener('mouseup', onUp);
-                  }}
-              />
-          </div>
-
-          <main className="flex-1 relative bg-slate-950">
-             <SimulationCanvas 
-                ref={canvasRef}
-                state={state}
-                onSelectBody={(id) => {
-                    if (dragMode === 'tool_combine' && id) {
-                         const newSel = [...combineSelection, id];
-                         setCombineSelection(newSel);
-                         if (newSel.length >= 2) {
-                             handleCombineBodies(newSel[0], newSel[1]);
-                             setCombineSelection([]); setDragMode('select');
-                         }
-                         return;
-                    }
-                    if (['add_spring', 'add_rod', 'add_pin', 'add_rope'].includes(dragMode) && id) {
-                        if (!constraintBuilder) setConstraintBuilder(id);
-                        else {
-                            const type = dragMode === 'add_spring' ? ConstraintType.SPRING : dragMode === 'add_rod' ? ConstraintType.ROD : dragMode === 'add_rope' ? ConstraintType.ROPE : ConstraintType.PIN;
-                            const bA = state.bodies.find(b => b.id === constraintBuilder);
-                            const bB = state.bodies.find(b => b.id === id);
-                            if (bA && bB) {
-                                const newC: Constraint = {
-                                    id: `c_${Date.now()}`, type, bodyAId: constraintBuilder, bodyBId: id,
-                                    localAnchorA: {x:0, y:0}, localAnchorB: {x:0, y:0},
-                                    length: Vec2.dist(bA.position, bB.position), stiffness: 0.5, damping: 0.1
-                                };
-                                setState(s => ({ ...s, constraints: [...s.constraints, newC] }));
-                            }
-                            setConstraintBuilder(null); setDragMode('select');
-                        }
-                        return;
-                    }
-                    setState(s => ({ ...s, selectedBodyId: id, selectedFieldId: null, selectedConstraintId: null }));
-                }}
-                onSelectField={(id) => setState(s => ({ ...s, selectedFieldId: id, selectedBodyId: null, selectedConstraintId: null }))}
-                onSelectConstraint={(id) => setState(s => ({ ...s, selectedConstraintId: id, selectedBodyId: null, selectedFieldId: null }))}
-                onAddBody={handleAddBody}
-                onAddField={(pos, size, shape, verts) => {
-                     const newField: PhysicsField = {
-                        id: `field_${Date.now()}`, type: FieldType.UNIFORM_ELECTRIC, shape, position: pos, size: size, radius: size.x, vertices: verts, strength: {x:10, y:0}, visible: true
-                     };
-                     setState(s => ({ ...s, fields: [...s.fields, newField], selectedFieldId: newField.id }));
-                     setDragMode('select');
-                }}
-                onMoveBody={handleMoveBody}
-                onVectorEdit={(id, type, vec) => setState(s => ({ ...s, bodies: s.bodies.map(b => b.id === id ? (type === 'velocity' ? { ...b, velocity: vec } : { ...b, constantForce: vec }) : b) }))}
-                dragMode={dragMode}
-                onZoom={(delta, mx, my) => {
-                    setState(s => {
-                        const scale = delta > 0 ? 0.9 : 1.1;
-                        const newZoom = Math.max(0.1, Math.min(10, s.camera.zoom * scale));
-                        const wx = (mx - s.camera.x) / s.camera.zoom;
-                        const wy = (my - s.camera.y) / s.camera.zoom;
-                        return { ...s, camera: { ...s.camera, zoom: newZoom, x: mx - wx * newZoom, y: my - wy * newZoom } };
-                    });
-                }}
-                onPan={(dx, dy) => setState(s => ({ ...s, camera: { ...s.camera, x: s.camera.x + dx, y: s.camera.y + dy, trackingBodyId: null } }))}
-                onPauseToggle={(p) => setState(s => ({ ...s, paused: p }))}
-                arcCreation={arcBuilder}
-                rampCreation={rampBuilder}
-                constraintBuilder={constraintBuilder}
-                polyBuilder={polyBuilder}
-             />
-             
-             {state.pinnedCharts.map(chart => (
-                 <div 
-                    key={chart.id}
-                    className="absolute shadow-xl border border-slate-700 rounded overflow-hidden z-40 bg-slate-900"
-                    style={{ left: chart.position.x, top: chart.position.y, width: 300, height: 200 }}
-                    onMouseDown={(e) => {
-                        e.stopPropagation();
-                        const startX = e.clientX; const startY = e.clientY;
-                        const initialX = chart.position.x; const initialY = chart.position.y;
-                        const moveHandler = (ev: MouseEvent) => {
-                            updateChartPosition(chart.id, initialX + (ev.clientX - startX), initialY + (ev.clientY - startY));
-                        };
-                        const upHandler = () => {
-                            document.removeEventListener('mousemove', moveHandler);
-                            document.removeEventListener('mouseup', upHandler);
-                        };
-                        document.addEventListener('mousemove', moveHandler);
-                        document.addEventListener('mouseup', upHandler);
-                    }}
-                 >
-                     <DataCharts selectedBodyId={chart.bodyId} state={state} onClose={() => closeChart(chart.id)} width={300} height={200} />
-                 </div>
-             ))}
-
-             <div className="absolute top-4 right-4 z-30">
+      {/* Header */}
+      <header className="h-12 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-4 z-20">
+        <div className="flex items-center space-x-3">
+            <Activity className="text-blue-500" />
+            <div className="flex flex-col">
+                <input 
+                    type="text" 
+                    value={state.name || "Untitled"} 
+                    onChange={(e) => setState(s => ({...s, name: e.target.value}))}
+                    className="font-bold text-sm bg-transparent border-none outline-none text-slate-200 w-32 focus:bg-slate-800/50 rounded px-1"
+                />
+            </div>
+        </div>
+        
+        <div className="flex items-center space-x-4">
+             <div className="flex items-center bg-slate-800 rounded-lg p-1 space-x-1">
                  <button 
-                    onClick={state.isRecording ? handleStopRecording : handleStartRecording}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-full shadow-lg border border-slate-700 transition-all font-bold text-xs ${state.isRecording ? 'bg-red-600 animate-pulse text-white' : 'bg-slate-800 text-white hover:bg-slate-700'}`}
+                    onClick={handleTogglePause}
+                    className={`p-1.5 rounded-md transition ${state.paused ? 'bg-green-600 hover:bg-green-500 text-white' : 'hover:bg-slate-700 text-slate-300'}`}
+                    title={state.paused ? "Play" : "Pause"}
                  >
-                     <Video size={16} />
-                     {state.isRecording ? "停止录制 (Stop)" : "录制 (WebM)"}
+                     {state.paused ? <Play size={18} fill="currentColor" /> : <Pause size={18} fill="currentColor" />}
+                 </button>
+                 <button 
+                    onClick={handleReset}
+                    className="p-1.5 rounded-md hover:bg-slate-700 text-slate-300 transition"
+                    title="Reset Simulation"
+                 >
+                     <RotateCcw size={18} />
+                 </button>
+             </div>
+             
+             <div className="h-6 w-px bg-slate-700 mx-2" />
+             
+             <div className="flex items-center gap-2">
+                 <button onClick={() => setShowSnapshots(!showSnapshots)} className={`p-1.5 rounded transition ${showSnapshots ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-amber-400'}`} title="Snapshots">
+                    <Timer size={18} />
+                 </button>
+                 <button onClick={() => setShowGlobalSettings(!showGlobalSettings)} className={`p-1.5 rounded transition ${showGlobalSettings ? 'bg-purple-600 text-white' : 'text-slate-400 hover:text-purple-400'}`} title="Global Settings">
+                    <Settings size={18} />
                  </button>
              </div>
 
-             <div className="absolute bottom-6 right-6 flex flex-col gap-2 z-20">
-                 <div className="bg-slate-800/80 p-1 rounded-lg backdrop-blur flex flex-col gap-1 border border-slate-700">
-                     <button onClick={() => setState(s => ({ ...s, camera: { ...s.camera, zoom: s.camera.zoom * 1.2 } }))} className="p-2 text-slate-300 hover:text-white hover:bg-slate-700 rounded"><ZoomIn size={18} /></button>
-                     <button onClick={() => setState(s => ({ ...s, camera: { ...s.camera, zoom: s.camera.zoom / 1.2 } }))} className="p-2 text-slate-300 hover:text-white hover:bg-slate-700 rounded"><ZoomOut size={18} /></button>
-                     <button onClick={() => setState(s => ({ ...s, camera: { x: 0, y: 0, zoom: 1, trackingBodyId: null } }))} className="p-2 text-slate-300 hover:text-white hover:bg-slate-700 rounded"><Maximize size={18} /></button>
+             <div className="h-6 w-px bg-slate-700 mx-2" />
+
+             <div className="flex space-x-2 text-xs">
+                 <button onClick={() => setPreset('smooth')} className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded transition hidden md:block" title="将所有物体（包括轨道）摩擦力设为0">一键光滑</button>
+                 <button onClick={() => setPreset('elastic')} className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded transition hidden md:block">完全弹性</button>
+                 <button onClick={clearAll} className="px-3 py-1.5 bg-red-900/30 hover:bg-red-900/50 text-red-300 rounded transition">清空</button>
+             </div>
+        </div>
+
+        <div className="flex items-center space-x-3">
+             <button 
+                onClick={toggleRecording} 
+                className={`p-2 rounded hover:text-white transition flex items-center gap-1 ${isRecording ? 'bg-red-600 text-white animate-pulse' : 'hover:bg-slate-800 text-slate-400'}`} 
+                title={isRecording ? "Stop Recording" : "Record Video"}
+             >
+                 {isRecording ? <Disc size={18} /> : <Video size={18} />}
+             </button>
+             <button onClick={() => canvasRef.current?.exportImage()} className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white" title="Export Image">
+                 <Camera size={18} />
+             </button>
+             <button onClick={handleSaveScene} className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white" title="Save Scene">
+                 <Download size={18} />
+             </button>
+             <label className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white cursor-pointer" title="Load Scene">
+                 <Upload size={18} />
+                 <input type="file" ref={fileInputRef} onChange={handleImportScene} className="hidden" accept=".json" />
+             </label>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <div className="flex-1 flex overflow-hidden relative">
+          
+          {/* Left Toolbar */}
+          <aside className="w-16 md:w-20 bg-slate-900 border-r border-slate-800 flex flex-col py-2 overflow-y-auto no-scrollbar select-none z-10 items-center">
+              
+              <div className="flex flex-col items-center gap-1 mb-2 w-full px-1">
+                 <button 
+                      onClick={() => setDragMode('select')}
+                      className={`p-2 w-full rounded-lg transition flex flex-col items-center ${dragMode === 'select' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
+                      title="选择 (Select)"
+                  >
+                      <MousePointer2 size={20} />
+                      <span className="text-[9px] mt-1">选择</span>
+                  </button>
+              </div>
+
+              {/* Group: Shapes */}
+              <CollapsibleGroup icon={<SquareIcon />} label="形状" defaultOpen={true}>
+                  <ToolBtn mode={dragMode} setMode={setDragMode} target="add_circle" icon={<CircleIcon />} label="圆形" />
+                  <ToolBtn mode={dragMode} setMode={setDragMode} target="add_box" icon={<SquareIcon />} label="矩形" />
+                  <ToolBtn mode={dragMode} setMode={setDragMode} target="add_particle" icon={<ParticleIcon />} label="质点" />
+                  <ToolBtn mode={dragMode} setMode={(m) => { setDragMode(m); setPolyBuilder([]); }} target="add_poly" icon={<Pentagon size={18} />} label="多边形" />
+                  <button onClick={() => setShowEquationBuilder(true)} className="p-1.5 w-full rounded transition flex flex-col items-center text-slate-400 hover:bg-slate-800" title="方程生成">
+                      <Calculator size={18} />
+                      <span className="text-[9px] mt-0.5 scale-90">方程</span>
+                  </button>
+              </CollapsibleGroup>
+
+              {/* Group: Environment */}
+              <CollapsibleGroup icon={<RampIcon />} label="环境">
+                  <button 
+                      onClick={() => { setDragMode('add_arc'); setArcBuilder(null); }}
+                      className={`p-1.5 w-full rounded transition flex flex-col items-center ${dragMode === 'add_arc' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
+                      title="弧形轨道"
+                  >
+                      <Eclipse size={18} />
+                      <span className="text-[9px] mt-0.5 scale-90">轨道</span>
+                  </button>
+                   <button 
+                      onClick={() => { setDragMode('add_ramp'); setRampBuilder(null); }}
+                      className={`p-1.5 w-full rounded transition flex flex-col items-center ${dragMode === 'add_ramp' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
+                      title="斜面"
+                  >
+                      <RampIcon />
+                      <span className="text-[9px] mt-0.5 scale-90">斜面</span>
+                  </button>
+                  <button 
+                      onClick={() => { setDragMode('add_conveyor'); setRampBuilder(null); }}
+                      className={`p-1.5 w-full rounded transition flex flex-col items-center ${dragMode === 'add_conveyor' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
+                      title="传送带"
+                  >
+                      <MoveRight size={18} />
+                      <span className="text-[9px] mt-0.5 scale-90">传送带</span>
+                  </button>
+              </CollapsibleGroup>
+
+              {/* Group: Linkage */}
+              <CollapsibleGroup icon={<Link size={16} />} label="连接">
+                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_spring" icon={<Activity size={18} />} label="弹簧" />
+                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_rod" icon={<Link size={18} />} label="刚性杆" />
+                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_rope" icon={<Minus size={18} className="rotate-45" />} label="轻绳" />
+                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_pin" icon={<Crosshair size={18} />} label="销钉" />
+              </CollapsibleGroup>
+
+              {/* Group: Fields */}
+              <CollapsibleGroup icon={<Zap size={16} />} label="场">
+                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_field_box" icon={<Scan size={18} />} label="矩形场" />
+                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_field_circle" icon={<Globe size={18} />} label="圆形场" />
+                   <ToolBtn mode={dragMode} setMode={setDragMode} target="add_field_poly" icon={<Layers size={18} />} label="多边形" />
+              </CollapsibleGroup>
+
+              {/* Group: Tools */}
+              <CollapsibleGroup icon={<Settings size={16} />} label="工具">
+                   <ToolBtn mode={dragMode} setMode={setDragMode} target="tool_velocity" icon={<MoveRight size={18} className="-rotate-45" />} label="速度" />
+                   <ToolBtn mode={dragMode} setMode={setDragMode} target="tool_force" icon={<Zap size={18} />} label="恒力" />
+                   <ToolBtn mode={dragMode} setMode={(m) => { setDragMode(m); setCombineSelection([]); }} target="tool_combine" icon={<Combine size={18} />} label="合并" />
+                   <ToolBtn mode={dragMode} setMode={setDragMode} target="tool_cut" icon={<Scissors size={18} />} label="切割" />
+              </CollapsibleGroup>
+
+          </aside>
+
+          {/* Canvas Area */}
+          <main className="flex-1 relative bg-slate-950 touch-none">
+             <SimulationCanvas 
+                ref={canvasRef}
+                state={state}
+                onSelectBody={handleSelectBody}
+                onSelectField={handleSelectField}
+                onSelectConstraint={handleSelectConstraint}
+                onAddBody={handleAddBody}
+                onAddField={handleAddField}
+                onMoveBody={handleBodyMove}
+                onVectorEdit={handleVectorEdit}
+                dragMode={dragMode}
+                onZoom={handleZoom}
+                onPauseToggle={(p) => setState(s => ({...s, paused: p}))}
+                arcCreation={arcBuilder} 
+                rampCreation={rampBuilder}
+                constraintBuilder={constraintBuilder}
+             />
+
+             {/* Equation Builder Modal */}
+             {showEquationBuilder && (
+                 <div className="absolute inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+                     <div className="bg-slate-900 border border-slate-700 rounded-lg shadow-2xl w-80 p-4">
+                         <div className="flex justify-between items-center mb-4 border-b border-slate-700 pb-2">
+                             <h3 className="text-white font-bold flex items-center gap-2"><Calculator size={16}/> 方程生成物体</h3>
+                             <button onClick={() => setShowEquationBuilder(false)} className="text-slate-400 hover:text-white"><X size={16}/></button>
+                         </div>
+                         <div className="space-y-3">
+                             <div>
+                                 <label className="text-xs text-slate-400 block mb-1">x(t) = </label>
+                                 <input type="text" value={eqParams.x} onChange={e => setEqParams({...eqParams, x: e.target.value})} className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs font-mono" />
+                             </div>
+                             <div>
+                                 <label className="text-xs text-slate-400 block mb-1">y(t) = </label>
+                                 <input type="text" value={eqParams.y} onChange={e => setEqParams({...eqParams, y: e.target.value})} className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs font-mono" />
+                             </div>
+                             <div className="grid grid-cols-3 gap-2">
+                                 <div>
+                                     <label className="text-[10px] text-slate-500 block">Start t</label>
+                                     <input type="number" value={eqParams.tStart} onChange={e => setEqParams({...eqParams, tStart: parseFloat(e.target.value)})} className="w-full bg-slate-800 border border-slate-600 rounded px-1 text-xs" />
+                                 </div>
+                                 <div>
+                                     <label className="text-[10px] text-slate-500 block">End t</label>
+                                     <input type="number" value={eqParams.tEnd} onChange={e => setEqParams({...eqParams, tEnd: parseFloat(e.target.value)})} className="w-full bg-slate-800 border border-slate-600 rounded px-1 text-xs" />
+                                 </div>
+                                 <div>
+                                     <label className="text-[10px] text-slate-500 block">Steps</label>
+                                     <input type="number" value={eqParams.steps} onChange={e => setEqParams({...eqParams, steps: parseFloat(e.target.value)})} className="w-full bg-slate-800 border border-slate-600 rounded px-1 text-xs" />
+                                 </div>
+                             </div>
+
+                             <div className="flex items-center gap-2 pt-1 border-t border-slate-700">
+                                 <input 
+                                     type="checkbox" 
+                                     id="hollowCheck" 
+                                     checked={eqParams.isHollow} 
+                                     onChange={e => setEqParams({...eqParams, isHollow: e.target.checked})}
+                                     className="rounded bg-slate-800 border-slate-600"
+                                 />
+                                 <label htmlFor="hollowCheck" className="text-xs text-amber-400 flex flex-col">
+                                     <span>链式结构 / 中空 (Chain/Hollow)</span>
+                                     <span className="text-[9px] text-slate-500">推荐开启。关闭后将生成实心凸多边形，可能导致"空气墙"。</span>
+                                 </label>
+                             </div>
+
+                             <button onClick={handleGenerateEquationBody} className="w-full bg-blue-600 hover:bg-blue-500 text-white py-1.5 rounded text-sm mt-2">生成 (Generate)</button>
+                         </div>
+                     </div>
                  </div>
-                 
-                 {state.selectedBodyId && (
-                     <button 
-                        onClick={() => setState(s => ({ ...s, camera: { ...s.camera, trackingBodyId: s.camera.trackingBodyId === s.selectedBodyId ? null : s.selectedBodyId } }))}
-                        className={`p-2 rounded-full shadow-lg border border-slate-700 ${state.camera.trackingBodyId === state.selectedBodyId ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400'}`}
-                        title="Focus Object"
-                     >
-                         <Focus size={20} />
-                     </button>
+             )}
+
+             {/* Dynamic Tool Hints */}
+             <div className="absolute top-4 left-1/2 -translate-x-1/2 flex flex-col items-center pointer-events-none gap-2">
+                 {dragMode === 'add_poly' && (
+                      <div className="bg-emerald-900/80 text-emerald-100 px-3 py-1 rounded-full text-xs shadow-lg">
+                          {polyBuilder.length === 0 ? "步骤 1: 点击画布添加顶点" : polyBuilder.length < 3 ? `顶点数: ${polyBuilder.length} (继续添加)` : "点击起点闭合形状以完成"}
+                      </div>
+                 )}
+                 {dragMode === 'tool_combine' && (
+                     <div className="bg-blue-900/80 text-blue-100 px-3 py-1 rounded-full text-xs shadow-lg">
+                         {combineSelection.length === 0 ? "依次点击两个物体进行合并" : "点击第二个物体..."}
+                     </div>
+                 )}
+                 {arcBuilder && (
+                     <div className="bg-blue-900/80 text-blue-100 px-3 py-1 rounded-full text-xs shadow-lg">
+                         {arcBuilder.phase === 1 ? '步骤 1/3: 点击圆心' : arcBuilder.phase === 2 ? '步骤 2/3: 拖拽/点击 定义半径和起点' : '步骤 3/3: 点击终点 (角度)'}
+                     </div>
+                 )}
+                 {rampBuilder && (
+                     <div className="bg-purple-900/80 text-purple-100 px-3 py-1 rounded-full text-xs shadow-lg">
+                         步骤 2/2: 点击终点以创建斜面
+                     </div>
+                 )}
+                 {constraintBuilder && (
+                     <div className="bg-amber-900/80 text-amber-100 px-3 py-1 rounded-full text-xs shadow-lg">
+                         选择第二个物体以建立连接
+                     </div>
                  )}
              </div>
 
-             {/* Snapshots & Settings Overlays */}
+             {/* Overlay Info */}
+             <div className="absolute top-4 right-4 bg-slate-900/80 backdrop-blur border border-slate-700 p-3 rounded-lg text-xs text-slate-300 pointer-events-none select-none shadow-xl flex flex-col gap-1 z-0">
+                 <div className="flex justify-between w-40">
+                     <span className="text-slate-500">缩放:</span>
+                     <span className="font-mono">{(state.camera.zoom * 100).toFixed(0)}%</span>
+                 </div>
+                 <div className="flex justify-between">
+                     <span className="text-slate-500">时间:</span>
+                     <span className="font-mono text-emerald-400">{formatTime(state.time)}</span>
+                 </div>
+                 <div className="flex justify-between">
+                     <span className="text-slate-500">对象:</span>
+                     <span className="font-mono">{state.bodies.length}</span>
+                 </div>
+             </div>
+
+             {/* Snapshots Panel */}
              {showSnapshots && (
-                 <div className="absolute top-14 right-10 bg-slate-900 border border-slate-700 p-4 rounded shadow-xl w-64 z-30">
-                     <h3 className="text-sm font-bold mb-2">历史快照</h3>
-                     <button onClick={handleTakeSnapshot} className="w-full bg-blue-600 hover:bg-blue-500 text-white py-1 rounded text-xs mb-2">创建快照</button>
-                     <div className="max-h-60 overflow-y-auto space-y-1">
-                         {snapshots.map(s => (
-                             <div key={s.id} onClick={() => handleLoadSnapshot(s)} className="p-2 bg-slate-800 hover:bg-slate-700 rounded cursor-pointer text-xs flex justify-between">
-                                 <span>{new Date(s.timestamp).toLocaleTimeString()}</span>
-                                 <span className="text-slate-500">{(s.data.length/1024).toFixed(1)}KB</span>
+                 <div className="absolute top-4 left-4 w-64 bg-slate-900/95 backdrop-blur border border-slate-700 rounded-lg shadow-xl p-3 z-20 flex flex-col max-h-[500px]">
+                     <div className="flex justify-between items-center mb-2">
+                         <h3 className="text-xs font-bold text-amber-500 uppercase flex items-center gap-2"><Clock size={14}/> 时间回溯</h3>
+                         <button onClick={() => setShowSnapshots(false)} className="text-slate-500 hover:text-white"><Minus size={14}/></button>
+                     </div>
+                     <button onClick={createSnapshot} className="bg-blue-600 hover:bg-blue-500 text-white text-xs py-1.5 px-2 rounded mb-3 flex items-center justify-center gap-2">
+                         <Camera size={14} /> 创建快照
+                     </button>
+                     <div className="flex-1 overflow-y-auto space-y-1">
+                         {snapshots.length === 0 && <p className="text-[10px] text-slate-500 text-center italic">无快照记录</p>}
+                         {snapshots.map(snap => (
+                             <div key={snap.id} className="flex justify-between items-center bg-slate-800/50 p-2 rounded hover:bg-slate-700 transition group">
+                                 <div className="flex flex-col">
+                                     <span className="text-xs font-mono text-emerald-400">{formatTime(snap.timestamp)}</span>
+                                     <span className="text-[9px] text-slate-500">Objects: {JSON.parse(snap.data).bodies.length}</span>
+                                 </div>
+                                 <div className="flex gap-1">
+                                     <button onClick={() => restoreSnapshot(snap)} className="text-[10px] bg-slate-600 hover:bg-emerald-600 text-white px-2 py-0.5 rounded">恢复</button>
+                                     <button onClick={() => setSnapshots(s => s.filter(x => x.id !== snap.id))} className="text-slate-500 hover:text-red-400 p-0.5"><Trash2 size={12}/></button>
+                                 </div>
                              </div>
                          ))}
                      </div>
                  </div>
              )}
-             
-             {showGlobalSettings && (
-                 <div className="absolute top-14 right-10 bg-slate-900 border border-slate-700 p-4 rounded shadow-xl w-64 z-30">
-                     <h3 className="text-sm font-bold mb-3">全局物理设置</h3>
-                     <div className="space-y-3 text-xs">
-                         <div>
-                             <label className="block text-slate-400 mb-1">重力 Gravity Y</label>
-                             <input type="number" value={state.gravity.y} onChange={e => setState({...state, gravity: {...state.gravity, y: parseFloat(e.target.value)}})} className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1"/>
-                         </div>
-                         <div className="flex items-center gap-2">
-                             <input type="checkbox" checked={state.enableAirResistance} onChange={e => setState({...state, enableAirResistance: e.target.checked})} />
-                             <label>空气阻力 Air Resistance</label>
-                         </div>
-                         <div className="flex items-center gap-2">
-                             <input type="checkbox" checked={state.enableCoulomb} onChange={e => setState({...state, enableCoulomb: e.target.checked})} />
-                             <label>库仑力 Coulomb</label>
-                         </div>
-                         <div className="flex items-center gap-2">
-                             <input type="checkbox" checked={state.enableUniversalGravity} onChange={e => setState({...state, enableUniversalGravity: e.target.checked})} />
-                             <label>万有引力 Gravity</label>
-                         </div>
-                     </div>
-                 </div>
-             )}
 
-             {showEquationBuilder && (
-                 <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-50">
-                     <div className="bg-slate-900 border border-slate-700 rounded-lg p-6 w-96 shadow-2xl">
-                         <h3 className="text-lg font-bold mb-4 text-emerald-400">参数方程创建物体</h3>
-                         <div className="space-y-3">
-                             <div>
-                                 <label className="text-xs text-slate-400 block mb-1">X = f(t)</label>
-                                 <input value={eqParams.x} onChange={e => setEqParams({...eqParams, x: e.target.value})} className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm font-mono"/>
-                             </div>
-                             <div>
-                                 <label className="text-xs text-slate-400 block mb-1">Y = g(t)</label>
-                                 <input value={eqParams.y} onChange={e => setEqParams({...eqParams, y: e.target.value})} className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm font-mono"/>
-                             </div>
+             {/* Global Settings Panel */}
+             {showGlobalSettings && (
+                 <div className="absolute top-4 left-72 w-56 bg-slate-900/95 backdrop-blur border border-slate-700 rounded-lg shadow-xl p-3 z-20">
+                     <div className="flex justify-between items-center mb-3">
+                         <h3 className="text-xs font-bold text-purple-500 uppercase flex items-center gap-2"><Settings size={14}/> 全局设置</h3>
+                         <button onClick={() => setShowGlobalSettings(false)} className="text-slate-500 hover:text-white"><Minus size={14}/></button>
+                     </div>
+                     
+                     <div className="space-y-4">
+                         <div>
+                             <label className="text-[10px] text-slate-400 uppercase mb-1 block">重力加速度 Gravity (g)</label>
                              <div className="grid grid-cols-2 gap-2">
                                  <div>
-                                     <label className="text-xs text-slate-400 block mb-1">t Start</label>
-                                     <input type="number" value={eqParams.tStart} onChange={e => setEqParams({...eqParams, tStart: parseFloat(e.target.value)})} className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm"/>
+                                     <span className="text-[9px] text-slate-500">X</span>
+                                     <input 
+                                        type="number" value={state.gravity.x} 
+                                        onChange={(e) => setState(s => ({...s, gravity: {...s.gravity, x: parseFloat(e.target.value)}}))}
+                                        className="w-full bg-slate-800 border border-slate-600 rounded px-1 text-xs"
+                                     />
                                  </div>
                                  <div>
-                                     <label className="text-xs text-slate-400 block mb-1">t End</label>
-                                     <input type="number" value={eqParams.tEnd} onChange={e => setEqParams({...eqParams, tEnd: parseFloat(e.target.value)})} className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm"/>
+                                     <span className="text-[9px] text-slate-500">Y</span>
+                                     <input 
+                                        type="number" value={state.gravity.y} 
+                                        onChange={(e) => setState(s => ({...s, gravity: {...s.gravity, y: parseFloat(e.target.value)}}))}
+                                        className="w-full bg-slate-800 border border-slate-600 rounded px-1 text-xs"
+                                     />
                                  </div>
                              </div>
-                             <div className="flex items-center gap-2">
-                                <input type="checkbox" checked={eqParams.isHollow} onChange={e => setEqParams({...eqParams, isHollow: e.target.checked})} />
-                                <label className="text-xs text-slate-400">空心 (Chain)</label>
+                         </div>
+
+                         <div>
+                             <div className="flex items-center justify-between mb-2">
+                                 <label className="text-[10px] text-slate-400 uppercase block">库仑力 Coulomb</label>
+                                 <input 
+                                    type="checkbox" 
+                                    checked={state.enableCoulomb} 
+                                    onChange={(e) => setState(s => ({...s, enableCoulomb: e.target.checked}))}
+                                    className="rounded border-slate-600 bg-slate-800"
+                                 />
                              </div>
-                             <div className="flex gap-2 mt-4">
-                                 <button onClick={handleCreateEquationBody} className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-1 rounded text-sm">生成</button>
-                                 <button onClick={() => setShowEquationBuilder(false)} className="flex-1 bg-slate-700 hover:bg-slate-600 text-white py-1 rounded text-sm">取消</button>
+
+                             <div className="flex items-center justify-between mb-2">
+                                 <label className="text-[10px] text-slate-400 uppercase block">万有引力 Universal Gravity</label>
+                                 <input 
+                                    type="checkbox" 
+                                    checked={state.enableUniversalGravity} 
+                                    onChange={(e) => setState(s => ({...s, enableUniversalGravity: e.target.checked}))}
+                                    className="rounded border-slate-600 bg-slate-800"
+                                 />
+                             </div>
+                             
+                             <div className="flex items-center justify-between">
+                                 <label className="text-[10px] text-slate-400 uppercase block">空气阻力 Air Resistance</label>
+                                 <input 
+                                    type="checkbox" 
+                                    checked={state.enableAirResistance} 
+                                    onChange={(e) => setState(s => ({...s, enableAirResistance: e.target.checked}))}
+                                    className="rounded border-slate-600 bg-slate-800"
+                                 />
                              </div>
                          </div>
                      </div>
                  </div>
              )}
+
+             {/* Floating Chart (Pinned) */}
+             {pinnedBodyId && (
+                 <div className="absolute top-24 right-4 w-80 h-48 bg-slate-900/95 backdrop-blur border border-slate-600 rounded-lg shadow-2xl z-10 flex flex-col">
+                      <div className="h-6 px-2 bg-slate-800 rounded-t-lg flex items-center justify-between">
+                          <span className="text-[10px] text-slate-400 uppercase">实时图表 (Pinned)</span>
+                      </div>
+                      <div className="flex-1 p-1">
+                          <DataCharts 
+                              selectedBodyId={pinnedBodyId}
+                              state={state}
+                              isPinned={true}
+                              onTogglePin={() => setPinnedBodyId(null)}
+                          />
+                      </div>
+                 </div>
+             )}
+             
+             {/* Zoom Controls */}
+             <div className="absolute bottom-4 left-4 flex flex-col space-y-1 z-10">
+                 <button onClick={() => setZoom(state.camera.zoom * 1.2)} className="p-2 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 shadow-lg"><Plus size={16} /></button>
+                 <button onClick={() => setZoom(state.camera.zoom / 1.2)} className="p-2 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 shadow-lg"><Minus size={16} /></button>
+                 <button onClick={handleResetView} className="p-2 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 shadow-lg"><Scan size={16} /></button>
+             </div>
           </main>
 
-          {/* Resizable Sidebar */}
-          <div className="relative z-20 flex" style={{ width: sidebarWidth }}>
-              {/* Resizer Handle */}
-              <div 
-                  className="w-1 cursor-col-resize hover:bg-blue-500 bg-slate-800 transition-colors absolute left-0 top-0 bottom-0 z-50"
-                  onMouseDown={(e) => {
-                      const startX = e.clientX;
-                      const startW = sidebarWidth;
-                      const onMove = (ev: MouseEvent) => setSidebarWidth(Math.max(200, Math.min(600, startW + (startX - ev.clientX)))); // Drag left increases width
-                      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
-                      document.addEventListener('mousemove', onMove);
-                      document.addEventListener('mouseup', onUp);
-                  }}
-              />
-              <div className="flex-1 bg-slate-900 border-l border-slate-800 flex flex-col overflow-hidden">
-                   <div className="flex-1 overflow-y-auto no-scrollbar border-b border-slate-800">
-                      <PropertiesPanel 
-                          body={state.selectedBodyId ? state.bodies.find(b => b.id === state.selectedBodyId) || null : null}
-                          field={state.selectedFieldId ? state.fields.find(f => f.id === state.selectedFieldId) || null : null}
-                          constraint={state.selectedConstraintId ? state.constraints.find(c => c.id === state.selectedConstraintId) || null : null}
-                          onUpdateBody={(id, u) => setState(s => ({...s, bodies: s.bodies.map(b => b.id === id ? {...b, ...u} : b)}))}
-                          onUpdateField={(id, u) => setState(s => ({...s, fields: s.fields.map(f => f.id === id ? {...f, ...u} : f)}))}
-                          onUpdateConstraint={(id, u) => setState(s => ({...s, constraints: s.constraints.map(c => c.id === id ? {...c, ...u} : c)}))}
-                          onDeleteBody={(id) => setState(s => ({...s, bodies: s.bodies.filter(b => b.id !== id), constraints: s.constraints.filter(c => c.bodyAId !== id && c.bodyBId !== id), selectedBodyId: null}))}
-                          onDeleteField={(id) => setState(s => ({...s, fields: s.fields.filter(f => f.id !== id), selectedFieldId: null}))}
-                          onDeleteConstraint={(id) => setState(s => ({...s, constraints: s.constraints.filter(c => c.id !== id), selectedConstraintId: null}))}
-                      />
-                   </div>
+          {/* Right Panel */}
+          <aside className="w-80 bg-slate-900 border-l border-slate-800 flex flex-col z-10 hidden md:flex">
+              {/* Top: Properties */}
+              <div className="flex-1 overflow-y-auto no-scrollbar border-b border-slate-800">
+                  <PropertiesPanel 
+                      body={state.selectedBodyId ? state.bodies.find(b => b.id === state.selectedBodyId) || null : null}
+                      field={state.selectedFieldId ? state.fields.find(f => f.id === state.selectedFieldId) || null : null}
+                      constraint={state.selectedConstraintId ? state.constraints.find(c => c.id === state.selectedConstraintId) || null : null}
+                      onUpdateBody={handleUpdateBody}
+                      onUpdateField={handleUpdateField}
+                      onUpdateConstraint={handleUpdateConstraint}
+                      onDeleteBody={handleDeleteBody}
+                      onDeleteField={handleDeleteField}
+                      onDeleteConstraint={handleDeleteConstraint}
+                  />
+                  {/* Tracking Button in Panel */}
+                  {state.selectedBodyId && (
+                      <div className="px-4 pb-4">
+                          <button 
+                            onClick={() => setState(s => ({...s, trackingBodyId: s.trackingBodyId === s.selectedBodyId ? null : s.selectedBodyId}))}
+                            className={`w-full py-1.5 rounded text-xs flex items-center justify-center gap-2 ${state.trackingBodyId === state.selectedBodyId ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+                          >
+                              <Target size={14}/> {state.trackingBodyId === state.selectedBodyId ? "停止追踪 (Stop Tracking)" : "镜头追踪 (Track Object)"}
+                          </button>
+                      </div>
+                  )}
               </div>
-          </div>
+              
+              {/* Bottom: Graphs (Only show if not pinned or if pinned ID is different from selected) */}
+              <div className="h-64 bg-slate-900 flex flex-col p-2 transition-all">
+                  <div className="flex items-center justify-between mb-2 px-1">
+                      <span className="text-xs font-semibold text-slate-500 uppercase">实时数据 (Data)</span>
+                      <Activity size={14} className="text-slate-600" />
+                  </div>
+                  <div className="flex-1 bg-slate-950 rounded border border-slate-800 relative overflow-hidden">
+                      <DataCharts 
+                          selectedBodyId={state.selectedBodyId} 
+                          state={state} 
+                          isPinned={pinnedBodyId === state.selectedBodyId}
+                          onTogglePin={(id) => setPinnedBodyId(id)}
+                      />
+                  </div>
+              </div>
+          </aside>
       </div>
     </div>
   );
